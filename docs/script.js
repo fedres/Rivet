@@ -116,7 +116,7 @@ function setupCodeCopy() {
 }
 
 function copyInstallCommand() {
-    const command = 'bash <(curl -sSL https://rivet.sh/install.sh)';
+    const command = 'curl -fsSL https://fedres.github.io/Rivet/install.sh | sh';
     navigator.clipboard.writeText(command).then(() => {
         const button = document.querySelector('.copy-button');
         const original = button.innerHTML;
