@@ -1,23 +1,32 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Rivet - Modern C++ Project Manager</title>
-    <meta name="description" content="A modern C++ project manager inspired by Cargo. Zero-config dependency management, workspace support, and build system.">
-    
+    <meta name="description"
+        content="A modern C++ project manager inspired by Cargo. Zero-config dependency management, workspace support, and build system.">
+
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-    
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600;700&display=swap"
+        rel="stylesheet">
+
     <!-- Styles -->
     <link rel="stylesheet" href="styles.css">
-    
+
     <!-- Favicon -->
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🔧%3C/text%3E%3C/svg%3E">
+    <link rel="icon" type="image/svg+xml"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🔧%3C/text%3E%3C/svg%3E">
 </head>
+
 <body>
+    <!-- Background Effects -->
+    <div class="scanlines"></div>
+
     <!-- Navigation -->
     <nav class="nav">
         <div class="nav-container">
@@ -27,7 +36,7 @@
             <div class="nav-links">
                 <a href="#features" class="nav-link">Features</a>
                 <a href="#install" class="nav-link">Install</a>
-                <a href="#docs" class="nav-link">Documentation</a>
+                <a href="#docs" class="nav-link">Docs</a>
                 <a href="#examples" class="nav-link">Examples</a>
                 <a href="https://github.com/fedres/Rivet" class="nav-link cta">GitHub</a>
             </div>
@@ -37,13 +46,14 @@
     <!-- Hero Section -->
     <section class="hero">
         <div class="hero-container">
-            <h1 class="hero-title">
+            <h1 class="hero-title glitch" data-text="Modern C++ Project Manager">
                 Modern C++ Project Manager
             </h1>
             <p class="hero-subtitle">
-                Inspired by Cargo. Zero-config dependency management, workspace support for monorepos, and a complete build system—all in one tool.
+                Inspired by Cargo. Zero-config dependency management, workspace support for monorepos, and a complete
+                build system—all in one tool.
             </p>
-            
+
             <!-- Install Terminal -->
             <div class="install-terminal" id="install">
                 <div class="terminal-header">
@@ -53,19 +63,27 @@
                         <span class="dot green"></span>
                     </div>
                     <span class="terminal-title">terminal</span>
+                    <button class="copy-button" onclick="copyInstallCommand()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                    </button>
                 </div>
                 <div class="terminal-content">
                     <div class="terminal-line">
                         <span class="prompt">$</span>
-                        <span class="command">git clone https://github.com/fedres/Rivet.git</span>
+                        <span class="command" id="install-command">bash &lt;(curl -sSL
+                            https://rivet.sh/install.sh)</span>
+                        <span class="cursor">█</span>
                     </div>
-                    <div class="terminal-line">
-                        <span class="prompt">$</span>
-                        <span class="command">cd Rivet/rivet && cargo build --release</span>
+                    <div class="terminal-output" id="terminal-output">
+                        <!-- Animation content will be injected here -->
                     </div>
                 </div>
             </div>
-            
+
             <div class="hero-stats">
                 <div class="stat">
                     <span class="stat-value">21</span>
@@ -92,11 +110,12 @@
                     <div class="feature-icon">📦</div>
                     <h3 class="feature-title">Zero-Config Dependencies</h3>
                     <p class="feature-description">
-                        Add libraries with one command via vcpkg integration. Automatic download, configuration, and linking.
+                        Add libraries with one command via vcpkg integration. Automatic download, configuration, and
+                        linking.
                     </p>
                     <code class="feature-code">rivet add boost</code>
                 </div>
-                
+
                 <div class="feature-card">
                     <div class="feature-icon">🏗️</div>
                     <h3 class="feature-title">Workspace Support</h3>
@@ -105,7 +124,7 @@
                     </p>
                     <code class="feature-code">rivet build # workspace</code>
                 </div>
-                
+
                 <div class="feature-card">
                     <div class="feature-icon">📚</div>
                     <h3 class="feature-title">Library Compilation</h3>
@@ -114,7 +133,7 @@
                     </p>
                     <code class="feature-code">crate-type = "staticlib"</code>
                 </div>
-                
+
                 <div class="feature-card">
                     <div class="feature-icon">🎯</div>
                     <h3 class="feature-title">Multiple Target Types</h3>
@@ -123,7 +142,7 @@
                     </p>
                     <code class="feature-code">[[bin]], [lib], [[example]]</code>
                 </div>
-                
+
                 <div class="feature-card">
                     <div class="feature-icon">🌍</div>
                     <h3 class="feature-title">Cross-Compilation</h3>
@@ -132,7 +151,7 @@
                     </p>
                     <code class="feature-code">rivet target add x86_64-pc-linux</code>
                 </div>
-                
+
                 <div class="feature-card">
                     <div class="feature-icon">⚡</div>
                     <h3 class="feature-title">Fast Commands</h3>
@@ -145,11 +164,42 @@
         </div>
     </section>
 
-    <!-- Commands Section -->
+    <!-- Interactive Commands Section -->
     <section class="commands" id="docs">
         <div class="container">
-            <h2 class="section-title">Complete Command Reference</h2>
-            <div class="command-groups">
+            <h2 class="section-title">Interactive Quick Start</h2>
+            <div class="command-interface">
+                <div class="command-tabs">
+                    <button class="command-tab active" data-command="new">rivet new</button>
+                    <button class="command-tab" data-command="build">rivet build</button>
+                    <button class="command-tab" data-command="install">rivet install</button>
+                    <button class="command-tab" data-command="version">--version</button>
+                </div>
+
+                <div class="command-terminal">
+                    <div class="terminal-header">
+                        <div class="terminal-dots">
+                            <span class="dot red"></span>
+                            <span class="dot yellow"></span>
+                            <span class="dot green"></span>
+                        </div>
+                        <span class="terminal-title">rivet-cli</span>
+                    </div>
+                    <div class="terminal-content">
+                        <div class="terminal-line">
+                            <span class="prompt">$</span>
+                            <span class="command" id="current-command">rivet new my_project --bin</span>
+                            <span class="cursor">█</span>
+                        </div>
+                        <div class="terminal-output" id="command-output">
+                            <!-- Output will be injected by JS -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Command Reference List -->
+            <div class="command-groups" style="margin-top: 4rem;">
                 <div class="command-group">
                     <h3 class="group-title">Project Management</h3>
                     <ul class="command-list">
@@ -157,7 +207,7 @@
                         <li><code>rivet new &lt;name&gt;</code> - Create new project</li>
                     </ul>
                 </div>
-                
+
                 <div class="command-group">
                     <h3 class="group-title">Build System</h3>
                     <ul class="command-list">
@@ -167,7 +217,7 @@
                         <li><code>rivet run [--bin &lt;name&gt;]</code> - Build and execute</li>
                     </ul>
                 </div>
-                
+
                 <div class="command-group">
                     <h3 class="group-title">Dependencies</h3>
                     <ul class="command-list">
@@ -175,31 +225,13 @@
                         <li><code>rivet remove &lt;package&gt;</code> - Remove dependency</li>
                     </ul>
                 </div>
-                
+
                 <div class="command-group">
                     <h3 class="group-title">Toolchains</h3>
                     <ul class="command-list">
                         <li><code>rivet toolchain list</code> - List toolchains</li>
                         <li><code>rivet toolchain install &lt;name&gt;</code> - Install toolchain</li>
                         <li><code>rivet toolchain use &lt;name&gt;</code> - Set active toolchain</li>
-                    </ul>
-                </div>
-                
-                <div class="command-group">
-                    <h3 class="group-title">Developer Tools</h3>
-                    <ul class="command-list">
-                        <li><code>rivet test</code> - Run tests</li>
-                        <li><code>rivet fmt</code> - Format code</li>
-                        <li><code>rivet lint</code> - Lint code</li>
-                    </ul>
-                </div>
-                
-                <div class="command-group">
-                    <h3 class="group-title">Cross-Compilation</h3>
-                    <ul class="command-list">
-                        <li><code>rivet target add &lt;triple&gt;</code> - Add target</li>
-                        <li><code>rivet target list</code> - List targets</li>
-                        <li><code>rivet target remove &lt;triple&gt;</code> - Remove target</li>
                     </ul>
                 </div>
             </div>
@@ -210,7 +242,7 @@
     <section class="examples" id="examples">
         <div class="container">
             <h2 class="section-title">Configuration Examples</h2>
-            
+
             <div class="example-group">
                 <h3 class="example-title">Simple Binary</h3>
                 <pre class="code-block"><code>[package]
@@ -221,7 +253,7 @@ version = "0.1.0"
 fmt = "*"
 boost = "1.82"</code></pre>
             </div>
-            
+
             <div class="example-group">
                 <h3 class="example-title">Library Package</h3>
                 <pre class="code-block"><code>[package]
@@ -232,7 +264,7 @@ version = "0.1.0"
 name = "mylib"
 crate-type = "staticlib"  # or "dylib"</code></pre>
             </div>
-            
+
             <div class="example-group">
                 <h3 class="example-title">Workspace (Monorepo)</h3>
                 <pre class="code-block"><code>[package]
@@ -245,24 +277,6 @@ members = [
     "utils",
     "app",
 ]</code></pre>
-            </div>
-            
-            <div class="example-group">
-                <h3 class="example-title">Complete Project</h3>
-                <pre class="code-block"><code>[package]
-name = "complete_project"
-version = "0.1.0"
-
-[lib]
-crate-type = "staticlib"
-
-[[bin]]
-name = "app1"
-path = "src/bin/app1.cpp"
-
-[[example]]
-name = "demo"
-path = "examples/demo.cpp"</code></pre>
             </div>
         </div>
     </section>
@@ -307,20 +321,18 @@ path = "examples/demo.cpp"</code></pre>
                     <div class="footer-section">
                         <h4 class="footer-title">Project</h4>
                         <a href="https://github.com/fedres/Rivet" class="footer-link">GitHub</a>
-                        <a href="https://github.com/fedres/Rivet/blob/production/README.md" class="footer-link">Documentation</a>
-                        <a href="https://github.com/fedres/Rivet/tree/production/examples" class="footer-link">Examples</a>
+                        <a href="https://github.com/fedres/Rivet/blob/production/README.md"
+                            class="footer-link">Documentation</a>
+                        <a href="https://github.com/fedres/Rivet/tree/production/examples"
+                            class="footer-link">Examples</a>
                     </div>
                     <div class="footer-section">
                         <h4 class="footer-title">Resources</h4>
                         <a href="https://github.com/fedres/Rivet/issues" class="footer-link">Issues</a>
-                        <a href="https://github.com/fedres/Rivet/blob/production/CONTRIBUTING.md" class="footer-link">Contributing</a>
-                        <a href="https://github.com/fedres/Rivet/blob/production/LICENSE" class="footer-link">License</a>
-                    </div>
-                    <div class="footer-section">
-                        <h4 class="footer-title">Features</h4>
-                        <a href="#features" class="footer-link">Workspace Support</a>
-                        <a href="#features" class="footer-link">Library Compilation</a>
-                        <a href="#features" class="footer-link">Cross-Compilation</a>
+                        <a href="https://github.com/fedres/Rivet/blob/production/CONTRIBUTING.md"
+                            class="footer-link">Contributing</a>
+                        <a href="https://github.com/fedres/Rivet/blob/production/LICENSE"
+                            class="footer-link">License</a>
                     </div>
                 </div>
             </div>
@@ -333,4 +345,5 @@ path = "examples/demo.cpp"</code></pre>
     <!-- Scripts -->
     <script src="script.js"></script>
 </body>
+
 </html>
