@@ -1,0 +1,27 @@
+# CNAME File Example
+# ==================
+# 
+# To use a custom domain instead of github.io:
+# 1. Copy this file to "CNAME" (without the .example extension)
+# 2. Replace "yourdomain.com" with your actual domain
+# 3. Update your DNS records with your domain provider
+#
+# Example for custom domain:
+# yourdomain.com
+#
+# Example for subdomain:
+# www.yourdomain.com
+#
+# DNS Records to add:
+# Type: CNAME
+# Name: www
+# Value: YOUR_USERNAME.github.io
+#
+# Type: A
+# Name: @
+# Value: 185.199.108.153
+# Value: 185.199.109.153  
+# Value: 185.199.110.153
+# Value: 185.199.111.153
+#
+# Note: Wait 24-48 hours for DNS propagation after updating records.

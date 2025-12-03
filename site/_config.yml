@@ -1,0 +1,82 @@
+# Rivet Website Configuration
+title: "RIVET: The C++ Dependency Revolution"
+description: "High-performance C++ dependency management with modern developer experience"
+author: "Rivet Project"
+
+# Site URL and base URL
+url: "https://rivet-lang.github.io"
+baseurl: ""
+
+# Navigation
+navigation:
+  - title: Install
+    url: "#install"
+  - title: Features
+    url: "#features"
+  - title: Docs
+    url: "#docs"
+  - title: Roadmap
+    url: "#roadmap"
+  - title: GitHub
+    url: "https://github.com/rivet-lang/rivet"
+
+# GitHub repository
+repository: rivet-lang/rivet
+
+# Social media links
+twitter_username: rivet_lang
+github_username: rivet-lang
+
+# Build settings
+markdown: kramdown
+highlighter: rouge
+
+# Plugins
+plugins:
+  - jekyll-feed
+  - jekyll-seo-tag
+
+# Exclude files from processing
+exclude:
+  - package.json
+  - package-lock.json
+  - node_modules/
+  - .DS_Store
+  - .idea/
+  - *.log
+
+# SEO and social meta
+logo: "/assets/logo.svg"
+social_image: "/assets/og-image.png"
+
+# Google Analytics (replace with your tracking ID)
+# google_analytics: "UA-XXXXXXXX-X"
+
+# Theme settings
+theme_color: "#00ffff"
+background_color: "#0a0a23"
+
+# Custom CSS/JS
+# Add any custom CSS or JS files here if needed
+
+# Markdown settings
+markdown_ext: "markdown,mkdown,mkdn,mkd,md"
+
+# Timezone
+timezone: UTC
+
+# Future posts (set to false to show all posts)
+future: true
+
+# Show drafts
+show_drafts: false
+
+# Limit posts on homepage
+paginate: 10
+paginate_path: "/page:num"
+
+# Syntax highlighting
+kramdown:
+  input: GFM
+  syntax_highlighter_opts:
+    css_class: "highlight"
