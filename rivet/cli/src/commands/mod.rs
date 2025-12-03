@@ -10,3 +10,6 @@ pub mod lint;
 pub mod target;
 pub mod search;
 pub mod publish;
+pub mod check;
+pub mod clean;
+pub mod run;

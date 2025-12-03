@@ -13,6 +13,7 @@ mod lint;
 mod error;
 mod target;
 mod registry;
+mod build_system;
 
 #[derive(Parser)]
 #[command(name = "rivet")]
@@ -81,6 +82,16 @@ enum Commands {
     },
     /// Publish package to registry
     Publish,
+    /// Check syntax without building
+    Check,
+    /// Remove build artifacts
+    Clean,
+    /// Build and run binary
+    Run {
+        /// Binary name (defaults to package name)
+        #[arg(long)]
+        bin: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -159,6 +170,15 @@ fn main() {
         }
         Commands::Publish => {
             commands::publish::execute();
+        }
+        Commands::Check => {
+            commands::check::execute();
+        }
+        Commands::Clean => {
+            commands::clean::execute();
+        }
+        Commands::Run { bin } => {
+            commands::run::execute(bin);
         }
     }
 }
