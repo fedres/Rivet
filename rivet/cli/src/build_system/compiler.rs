@@ -3,7 +3,7 @@ use std::process::Command;
 use colored::Colorize;
 
 pub struct Compiler {
-    executable: PathBuf,
+    pub executable: PathBuf,
     flags: Vec<String>,
 }
 

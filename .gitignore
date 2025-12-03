@@ -9,7 +9,7 @@ Cargo.lock
 *.dylib
 *.dll
 *.exe
-build/
+/build/
 cmake-build-*/
 
 # vcpkg

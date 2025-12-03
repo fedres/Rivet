@@ -14,6 +14,8 @@ mod error;
 mod target;
 mod registry;
 mod build_system;
+mod package;
+mod workspace;
 
 #[derive(Parser)]
 #[command(name = "rivet")]

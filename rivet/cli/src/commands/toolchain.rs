@@ -28,12 +28,21 @@ pub fn use_toolchain(name: String) {
     // We need to make ToolchainConfig fields public or add a method, but for now let's just create it
     // Wait, ToolchainConfig fields are public in config.rs
     
-    config.toolchain = Some(crate::config::ToolchainConfig {
-        compiler: name.clone(),
-        version: "auto".to_string(),
-    });
+    let updated_config = RivetConfig {
+        package: config.package,
+        dependencies: config.dependencies,
+        toolchain: Some(crate::config::ToolchainConfig {
+            compiler: name.clone(),
+            version: Some("auto".to_string()),
+        }),
+        workspace: config.workspace,
+        lib: config.lib,
+        bin: config.bin,
+        example: config.example,
+        bench: config.bench,
+    };
 
-    let new_toml = toml::to_string(&config).unwrap();
+    let new_toml = toml::to_string(&updated_config).unwrap();
     fs::write("rivet.toml", new_toml).expect("Failed to write rivet.toml");
     println!("Set active toolchain to: {}", name);
 }
