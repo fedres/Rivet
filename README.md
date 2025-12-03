@@ -1,32 +1,32 @@
 # Rivet
 
-> A modern C++ project manager inspired by Cargo
+> A modern C++ project manager inspired by Cargo - **Now with complete workspace support!**
 
 [![Build Status](https://github.com/fedres/Rivet/workflows/CI/badge.svg)](https://github.com/fedres/Rivet/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Rivet brings the Cargo experience to C++. Zero-config dependency management, toolchain management, and cross-compilation support—all with a modern CLI.
+Rivet brings the complete Cargo experience to C++. Zero-config dependency management, workspace support for monorepos, library compilation, cross-compilation, and a modern CLI—all in one tool.
 
 ## ✨ Features
 
-- 🚀 **Zero-Config Dependency Management** - Add libraries with one command, powered by vcpkg
-- 🔧 **Toolchain Management** - Install and switch between compilers easily
-- 🌍 **Cross-Compilation** - Build for multiple platforms from a single machine
-- 📦 **Package Registry** - Publish and discover C++ packages (mock implementation)
-- 🔒 **Reproducible Builds** - Isolated environments ensure consistency
-- 🎯 **Developer Tools** - Built-in test, format, and lint commands
-- 🎨 **Modern UX** - Progress bars, colored output, helpful error messages
+- 🚀 **Zero-Config Dependency Management** - Add libraries with one command via vcpkg
+- 📦 **Workspace Support** - Multi-package monorepo builds 
+- 📚 **Library Compilation** - Static and shared libraries with `ar` integration
+- 🎯 **Multiple Target Types** - Binaries, libraries, examples, benchmarks
+- 🔧 **Toolchain Management** - Install and switch between compilers
+- 🌍 **Cross-Compilation** - Build for multiple platforms
+- 🔒 **Reproducible Builds** - Isolated environments
+- ⚡ **Fast Commands** - `check`, `clean`, `run` for rapid development
+- 🎨 **Modern UX** - Progress bars, colored output, helpful errors
 
 ## 🚀 Quick Start
 
 ### Installation
 
 ```bash
-# Clone the repository
+# Clone and build
 git clone https://github.com/fedres/Rivet.git
 cd Rivet/rivet
-
-# Build Rivet
 cargo build --release
 
 # Add to PATH
@@ -36,137 +36,214 @@ export PATH="$PWD/target/release:$PATH"
 ### Create Your First Project
 
 ```bash
-# Create a new project
+# Single package
 rivet new hello_world
 cd hello_world
-
-# Add a dependency
 rivet add fmt
+rivet build
+rivet run
 
-# Write some code
-cat > src/main.cpp << 'EOF'
-#include <fmt/core.h>
+# Workspace (monorepo)
+rivet new my_workspace
+cd my_workspace
 
-int main() {
-    fmt::print("Hello from Rivet!\n");
-    return 0;
-}
+# Edit rivet.toml to add workspace
+cat > rivet.toml << 'EOF'
+[package]
+name = "my_workspace"
+version = "0.1.0"
+
+[workspace]
+members = ["core", "app"]
 EOF
 
-# Build and run
-rivet build
-./target/debug/hello_world
+# Create packages
+mkdir -p core/src app/src
+# ... (see examples/complex-demo for full example)
+
+rivet build  # Builds entire workspace!
 ```
 
-Output:
-```
-Hello from Rivet!
-```
+## 📚 Complete Command Reference
 
-## 📚 Documentation
-
-- **[Quick Start Guide](rivet/QUICKSTART.md)** - Get started in 5 minutes
-- **[Implementation Summary](rivet/IMPLEMENTATION_SUMMARY.md)** - Technical overview
-- **[Contributing Guide](CONTRIBUTING.md)** - How to contribute
-
-## 🎯 Commands
-
-### Project Management
+### Project Management (2)
 ```bash
 rivet init                    # Initialize in current directory
 rivet new <name>             # Create new project
 ```
 
-### Dependencies
+### Build System (4)
+```bash
+rivet build                  # Build project/workspace
+rivet check                  # Fast syntax checking
+rivet clean                  # Remove build artifacts  
+rivet run [--bin <name>]     # Build and execute
+```
+
+### Dependencies (2)
 ```bash
 rivet add <package>          # Add dependency
 rivet remove <package>       # Remove dependency
-rivet build                  # Build project
 ```
 
-### Toolchains
+### Toolchains (3)
 ```bash
-rivet toolchain list         # List available toolchains
+rivet toolchain list         # List toolchains
 rivet toolchain install <name>  # Install toolchain
 rivet toolchain use <name>   # Set active toolchain
 ```
 
-### Cross-Compilation
+### Cross-Compilation (3)
 ```bash
 rivet target add <triple>    # Add build target
-rivet target list            # List configured targets
-rivet build --target <triple>  # Build for specific target
+rivet target list            # List targets
+rivet target remove <triple> # Remove target
 ```
 
-### Package Registry
+### Package Registry (2)
 ```bash
-rivet search <query>         # Search for packages
-rivet publish                # Publish package to registry
+rivet search <query>         # Search packages
+rivet publish                # Publish package
 ```
 
-### Environment Isolation
+### Environment (2)
 ```bash
-rivet isolate init           # Create isolated environment
-rivet isolate run -- <cmd>   # Run command in isolation
+rivet isolate init           # Create isolated env
+rivet isolate run -- <cmd>   # Run in isolation
 ```
 
-### Development Tools
+### Developer Tools (3)
 ```bash
 rivet test                   # Run tests
 rivet fmt                    # Format code
 rivet lint                   # Lint code
 ```
 
+**Total: 21 commands**
+
 ## 📋 Configuration
 
-Rivet uses a simple `rivet.toml` file:
-
+### Simple Project
 ```toml
 [package]
 name = "my_app"
 version = "0.1.0"
-edition = "2023"
 
 [dependencies]
 fmt = "*"
 boost = "1.82"
+```
 
-[toolchain]
-compiler = "clang++"
-version = "auto"
+### Library Package
+```toml
+[package]
+name = "mylib"
+version = "0.1.0"
 
-[targets.x86_64-pc-windows-msvc]
-toolchain = "clang-cl"
+[lib]
+name = "mylib"
+crate-type = "staticlib"  # or "dylib" or both
+
+[dependencies]
+fmt = "*"
+```
+
+### Workspace (Monorepo)
+```toml
+[package]
+name = "my_workspace"
+version = "0.1.0"
+
+[workspace]
+members = [
+    "core",      # Library
+    "utils",     # Library
+    "app",       # Binary
+]
+```
+
+### Multiple Targets
+```toml
+[package]
+name = "complete_project"
+version = "0.1.0"
+
+# Library
+[lib]
+crate-type = "staticlib"
+
+# Multiple binaries
+[[bin]]
+name = "app1"
+path = "src/bin/app1.cpp"
+
+[[bin]]
+name = "app2"
+path = "src/bin/app2.cpp"
+
+# Examples
+[[example]]
+name = "demo"
+path = "examples/demo.cpp"
+
+# Benchmarks
+[[bench]]
+name = "perf"
+path = "benches/perf.cpp"
+```
+
+## 🎓 Examples
+
+### Complex Workspace Demo
+
+See [`examples/complex-demo/`](examples/complex-demo/) for a complete workspace example with:
+- 3 packages (2 libraries + 1 binary)
+- Static library compilation
+- Multi-package build coordination
+- Include path management
+
+```bash
+cd examples/complex-demo
+rivet build
+./target/debug/calculator
+```
+
+Output:
+```
+📦 Discovering workspace members...
+  → mathlib
+  → stringutils
+  → app
+🔨 Building workspace with 3 packages
+
+Building mathlib
+  Compiling library mathlib
+
+Building stringutils
+  Compiling library stringutils
+
+Building app
+  Compiling binary calculator
+
+✓ Build complete
 ```
 
 ## 🏗️ Architecture
 
 ```
-rivet/
-├── cli/                     # Rust CLI (main implementation)
-│   ├── src/
-│   │   ├── commands/       # Command implementations
-│   │   ├── dependency/     # vcpkg integration
-│   │   ├── build/          # Build system
-│   │   ├── toolchain/      # Toolchain management
-│   │   ├── target/         # Cross-compilation
-│   │   ├── registry/       # Package registry
-│   │   └── isolation/      # Environment isolation
-│   └── tests/              # Integration tests
-└── engine/                  # C++ build engine
-    ├── include/
-    └── src/
+rivet/cli/src/
+├── build_system/          # Build graph & incremental compilation
+│   ├── graph/            # Dependency graph
+│   ├── cache.rs          # Build cache
+│   └── compiler.rs       # Compiler abstraction
+├── workspace/            # Workspace management
+├── package/              # Package & target types
+├── commands/             # 21 command implementations
+├── dependency/           # vcpkg integration
+├── toolchain/            # Toolchain management
+├── target/               # Cross-compilation
+└── registry/             # Package registry
 ```
-
-## 🔧 Requirements
-
-- **Rust 1.70+** (for building Rivet)
-- **C++17 compiler** (clang++ or g++)
-- **Git** (for vcpkg)
-
-### Optional Tools
-- `clang-format` (for `rivet fmt`)
-- `clang-tidy` (for `rivet lint`)
 
 ## 🌍 Platform Support
 
@@ -177,139 +254,60 @@ rivet/
 | Linux (Ubuntu, Fedora, Arch) | ✅ Fully Supported |
 | Windows | ⚠️ Basic Support |
 
-## 📊 Project Status
+## 🆚 Comparison with Other Tools
 
-- **Version:** 0.1.0 (Alpha)
-- **Commands:** 18+
+| Feature | Rivet | CMake + vcpkg | Cargo (Rust) |
+|---------|-------|---------------|--------------|
+| Setup Time | 30 seconds | Hours | 30 seconds |
+| Config Files | 1 | 3+ | 1 |
+| Workspace Support | ✅ | ⚠️ | ✅ |
+| Library Compilation | ✅ | ✅ | ✅ |
+| Cross-Compilation | ✅ | ⚠️ | ✅ |
+| Package Registry | ✅ (mock) | ❌ | ✅ |
+| Learning Curve | Gentle | Steep | Gentle |
+
+## 📊 Project Stats
+
+- **Commands:** 21
+- **Lines of Code:** ~6000+
 - **Test Coverage:** 92%
-- **Build Status:** Passing
-
-## 🎓 Examples
-
-### Using Boost
-
-```bash
-rivet new boost_example
-cd boost_example
-rivet add boost
-```
-
-```cpp
-#include <boost/asio.hpp>
-#include <iostream>
-
-int main() {
-    boost::asio::io_context io;
-    std::cout << "Boost.Asio works!\n";
-    return 0;
-}
-```
-
-### Running Tests with Catch2
-
-```bash
-rivet add catch2
-mkdir tests
-cat > tests/test_main.cpp << 'EOF'
-#include <catch2/catch_test_macros.hpp>
-
-TEST_CASE("Example test", "[example]") {
-    REQUIRE(1 + 1 == 2);
-}
-EOF
-
-rivet test
-```
-
-### Cross-Compiling for Windows
-
-```bash
-rivet target add x86_64-pc-windows-msvc
-rivet build --target x86_64-pc-windows-msvc
-```
-
-## 🆚 Comparison
-
-| Feature | Rivet | CMake + vcpkg | Conan |
-|---------|-------|---------------|-------|
-| Setup Time | 30 seconds | Hours | Hours |
-| Config Files | 1 (rivet.toml) | 3+ | 2+ |
-| Learning Curve | Gentle | Steep | Moderate |
-| Toolchain Mgmt | Built-in | Manual | Manual |
-| Cross-Compilation | Built-in | Manual | Manual |
-| Package Registry | Yes (mock) | No | Yes |
+- **Target Types:** 4 (Binary, Library, Example, Bench)
+- **Library Kinds:** 3 (Static, Shared, Both)
 
 ## 🤝 Contributing
 
 We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-### Development Setup
-
-```bash
-# Clone the repository
-git clone https://github.com/fedres/Rivet.git
-cd Rivet/rivet
-
-# Run tests
-cargo test
-
-# Run with logging
-RIVET_LOG=debug cargo run -- build
-```
-
 ## 🐛 Troubleshooting
 
 ### "vcpkg not found"
-Rivet will automatically download vcpkg on first use. If this fails:
+Rivet auto-downloads vcpkg on first use. If this fails:
 ```bash
 rm -rf ~/.rivet/vcpkg
-rivet build  # Will re-download
+rivet build  # Re-downloads
 ```
 
 ### "Toolchain not found"
 ```bash
-rivet toolchain list  # See available toolchains
-rivet toolchain use clang++  # Use system compiler
+rivet toolchain list
+rivet toolchain use clang++
 ```
 
-### Build fails with linking errors
-Check that the dependency name matches the library name:
-```bash
-rivet add nlohmann-json  # Package name
-# Links with: -lnlohmann_json (library name)
-```
+### Workspace build issues
+Ensure all members have valid `rivet.toml` files and are listed in the workspace `members` array.
 
 ## 📜 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) for details.
 
 ## 🙏 Acknowledgments
 
-- Inspired by [Cargo](https://doc.rust-lang.org/cargo/) (Rust)
-- Built on [vcpkg](https://vcpkg.io/) (Microsoft)
+- Inspired by [Cargo](https://doc.rust-lang.org/cargo/)
+- Built on [vcpkg](https://vcpkg.io/)
 - Uses [cxx](https://cxx.rs/) for Rust/C++ interop
-
-## 🗺️ Roadmap
-
-- [x] Basic dependency management
-- [x] Toolchain management
-- [x] Environment isolation
-- [x] Developer workflow commands
-- [x] Cross-compilation support
-- [x] Package registry (mock)
-- [ ] Real hosted package registry
-- [ ] Workspace support (monorepos)
-- [ ] IDE integration (compile_commands.json)
-- [ ] Package signing & verification
-- [ ] Binary caching
-
-## 📞 Contact
-
-- **Issues:** [GitHub Issues](https://github.com/fedres/Rivet/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/fedres/Rivet/discussions)
 
 ---
 
-Made with ❤️ for the C++ community
+**Made with ❤️ for the C++ community**
 
-**Star ⭐ this repo if you find it useful!**
+**Star ⭐ this repo if Rivet makes your C++ development easier!**
