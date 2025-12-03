@@ -11,7 +11,7 @@ mod test;
 mod format;
 mod lint;
 mod error;
-mod target;
+mod targets;
 mod registry;
 mod build_system;
 mod package;

@@ -22,7 +22,7 @@ pub fn install(name: String) {
 pub fn use_toolchain(name: String) {
     // Update rivet.toml
     let config_content = fs::read_to_string("rivet.toml").expect("Failed to read rivet.toml");
-    let mut config: RivetConfig = toml::from_str(&config_content).expect("Failed to parse rivet.toml");
+    let config: RivetConfig = toml::from_str(&config_content).expect("Failed to parse rivet.toml");
 
     // For now, we just update the toolchain config
     // We need to make ToolchainConfig fields public or add a method, but for now let's just create it

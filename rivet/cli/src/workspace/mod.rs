@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::fs;
-use std::collections::HashMap;
+
 use crate::config::RivetConfig;
 use crate::package::Package;
 use colored::Colorize;

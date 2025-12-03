@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+
 use crate::config::RivetConfig;
 
 pub fn execute() {

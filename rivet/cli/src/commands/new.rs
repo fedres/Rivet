@@ -1,8 +1,8 @@
 use std::fs;
-use std::path::Path;
+
 use crate::config::RivetConfig;
 
-pub fn execute(name: String, lib: bool) {
+pub fn execute(name: String, _lib: bool) {
     let project_dir = std::path::Path::new(&name);
 
     if project_dir.exists() {

@@ -5,7 +5,7 @@ use std::fs;
 use serde_json::Value;
 use indicatif::{ProgressBar, ProgressStyle};
 use colored::Colorize;
-use tracing::{info, debug};
+use tracing::debug;
 
 pub struct VcpkgManager {
     vcpkg_root: PathBuf,

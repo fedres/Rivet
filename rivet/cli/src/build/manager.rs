@@ -1,13 +1,13 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::fs;
-use crate::config::RivetConfig;
+
 use crate::dependency::vcpkg::VcpkgManager;
 use crate::workspace::Workspace;
 use crate::package::{Target, LibraryKind};
 use crate::build_system::compiler::Compiler;
 use colored::Colorize;
-use tracing::{info, debug};
+use tracing::info;
 
 pub struct BuildManager {
     workspace: Workspace,
