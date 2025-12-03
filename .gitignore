@@ -1,0 +1,36 @@
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+
+# C++
+*.o
+*.so
+*.dylib
+*.dll
+*.exe
+build/
+cmake-build-*/
+
+# vcpkg
+vcpkg/
+vcpkg_installed/
+
+# Rivet
+.rivet/
+rivet.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+test_*/
+*.log
