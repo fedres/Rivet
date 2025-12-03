@@ -35,7 +35,7 @@
             </div>
             <div class="nav-links">
                 <a href="#features" class="nav-link">Features</a>
-                <a href="#install" class="nav-link">Install</a>
+                <a href="#demo" class="nav-link">Live Demo</a>
                 <a href="#docs" class="nav-link">Docs</a>
                 <a href="#examples" class="nav-link">Examples</a>
                 <a href="https://github.com/fedres/Rivet" class="nav-link cta">GitHub</a>
@@ -62,7 +62,7 @@
                         <span class="dot yellow"></span>
                         <span class="dot green"></span>
                     </div>
-                    <span class="terminal-title">terminal</span>
+                    <span class="terminal-title">rivet-cli</span>
                     <button class="copy-button" onclick="copyInstallCommand()">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2">
@@ -164,145 +164,120 @@
         </div>
     </section>
 
-    <!-- Interactive Commands Section -->
-    <section class="commands" id="docs">
+    <!-- Live Demo Section -->
+    <section class="live-demo" id="demo">
         <div class="container">
-            <h2 class="section-title">Interactive Quick Start</h2>
-            <div class="command-interface">
-                <div class="command-tabs">
-                    <button class="command-tab active" data-command="new">rivet new</button>
-                    <button class="command-tab" data-command="build">rivet build</button>
-                    <button class="command-tab" data-command="install">rivet install</button>
-                    <button class="command-tab" data-command="version">--version</button>
-                </div>
+            <h2 class="section-title">Live Build Demo</h2>
+            <p class="section-subtitle">Watch Rivet build a complex workspace with multiple packages and dependencies.
+            </p>
 
-                <div class="command-terminal">
+            <div class="demo-container">
+                <div class="demo-terminal">
                     <div class="terminal-header">
                         <div class="terminal-dots">
                             <span class="dot red"></span>
                             <span class="dot yellow"></span>
                             <span class="dot green"></span>
                         </div>
-                        <span class="terminal-title">rivet-cli</span>
+                        <span class="terminal-title">rivet-build-demo</span>
                     </div>
-                    <div class="terminal-content">
+                    <div class="terminal-content" id="demo-terminal-content">
                         <div class="terminal-line">
                             <span class="prompt">$</span>
-                            <span class="command" id="current-command">rivet new my_project --bin</span>
-                            <span class="cursor">█</span>
+                            <span class="command">cd examples/complex-demo && rivet build</span>
                         </div>
-                        <div class="terminal-output" id="command-output">
-                            <!-- Output will be injected by JS -->
+                        <div class="terminal-output" id="demo-output">
+                            <!-- Live build animation will play here -->
                         </div>
                     </div>
                 </div>
             </div>
+        </div>
+    </section>
 
-            <!-- Command Reference List -->
-            <div class="command-groups" style="margin-top: 4rem;">
-                <div class="command-group">
-                    <h3 class="group-title">Project Management</h3>
-                    <ul class="command-list">
-                        <li><code>rivet init</code> - Initialize in current directory</li>
-                        <li><code>rivet new &lt;name&gt;</code> - Create new project</li>
-                    </ul>
+    <!-- Interactive Terminals Section -->
+    <section class="interactive-terminals">
+        <div class="container">
+            <h2 class="section-title">Workflow Tools</h2>
+            <div class="terminals-grid">
+                <!-- Project Management Terminal -->
+                <div class="mini-terminal">
+                    <div class="terminal-header">
+                        <span class="terminal-title">Project Management</span>
+                    </div>
+                    <div class="terminal-content">
+                        <div class="terminal-line"><span class="prompt">$</span> rivet new my_app</div>
+                        <div class="output-line success">Created binary (application) `my_app` package</div>
+                        <div class="terminal-line"><span class="prompt">$</span> rivet init</div>
+                        <div class="output-line success">Initialized existing directory</div>
+                    </div>
                 </div>
 
-                <div class="command-group">
-                    <h3 class="group-title">Build System</h3>
-                    <ul class="command-list">
-                        <li><code>rivet build</code> - Build project/workspace</li>
-                        <li><code>rivet check</code> - Fast syntax checking</li>
-                        <li><code>rivet clean</code> - Remove build artifacts</li>
-                        <li><code>rivet run [--bin &lt;name&gt;]</code> - Build and execute</li>
-                    </ul>
+                <!-- Dependencies Terminal -->
+                <div class="mini-terminal">
+                    <div class="terminal-header">
+                        <span class="terminal-title">Dependency Management</span>
+                    </div>
+                    <div class="terminal-content">
+                        <div class="terminal-line"><span class="prompt">$</span> rivet add fmt</div>
+                        <div class="output-line">Adding dependency fmt...</div>
+                        <div class="output-line success">✓ Added fmt v9.1.0</div>
+                        <div class="terminal-line"><span class="prompt">$</span> rivet add boost</div>
+                        <div class="output-line success">✓ Added boost v1.82.0</div>
+                    </div>
                 </div>
 
-                <div class="command-group">
-                    <h3 class="group-title">Dependencies</h3>
-                    <ul class="command-list">
-                        <li><code>rivet add &lt;package&gt;</code> - Add dependency</li>
-                        <li><code>rivet remove &lt;package&gt;</code> - Remove dependency</li>
-                    </ul>
-                </div>
-
-                <div class="command-group">
-                    <h3 class="group-title">Toolchains</h3>
-                    <ul class="command-list">
-                        <li><code>rivet toolchain list</code> - List toolchains</li>
-                        <li><code>rivet toolchain install &lt;name&gt;</code> - Install toolchain</li>
-                        <li><code>rivet toolchain use &lt;name&gt;</code> - Set active toolchain</li>
-                    </ul>
+                <!-- Toolchain Terminal -->
+                <div class="mini-terminal">
+                    <div class="terminal-header">
+                        <span class="terminal-title">Toolchain Management</span>
+                    </div>
+                    <div class="terminal-content">
+                        <div class="terminal-line"><span class="prompt">$</span> rivet toolchain list</div>
+                        <div class="output-line">clang++ (system) [default]</div>
+                        <div class="output-line">g++ (system)</div>
+                        <div class="terminal-line"><span class="prompt">$</span> rivet toolchain use g++</div>
+                        <div class="output-line success">Switched to g++ toolchain</div>
+                    </div>
                 </div>
             </div>
         </div>
     </section>
 
-    <!-- Examples Section -->
-    <section class="examples" id="examples">
+    <!-- Vim Editor Section -->
+    <section class="configuration" id="examples">
         <div class="container">
-            <h2 class="section-title">Configuration Examples</h2>
-
-            <div class="example-group">
-                <h3 class="example-title">Simple Binary</h3>
-                <pre class="code-block"><code>[package]
-name = "my_app"
-version = "0.1.0"
-
-[dependencies]
-fmt = "*"
-boost = "1.82"</code></pre>
-            </div>
-
-            <div class="example-group">
-                <h3 class="example-title">Library Package</h3>
-                <pre class="code-block"><code>[package]
-name = "mylib"
-version = "0.1.0"
-
-[lib]
-name = "mylib"
-crate-type = "staticlib"  # or "dylib"</code></pre>
-            </div>
-
-            <div class="example-group">
-                <h3 class="example-title">Workspace (Monorepo)</h3>
-                <pre class="code-block"><code>[package]
-name = "my_workspace"
-version = "0.1.0"
-
-[workspace]
-members = [
-    "core",
-    "utils",
-    "app",
-]</code></pre>
-            </div>
-        </div>
-    </section>
-
-    <!-- Platform Support -->
-    <section class="platform-support">
-        <div class="container">
-            <h2 class="section-title">Platform Support</h2>
-            <div class="platform-grid">
-                <div class="platform-card">
-                    <span class="platform-icon">🍎</span>
-                    <h3>macOS</h3>
-                    <p>Full support for Intel and Apple Silicon</p>
-                    <span class="platform-status supported">✓ Fully Supported</span>
+            <h2 class="section-title">Simple Configuration</h2>
+            <div class="vim-editor">
+                <div class="vim-header">
+                    <span class="vim-filename">rivet.toml</span>
                 </div>
-                <div class="platform-card">
-                    <span class="platform-icon">🐧</span>
-                    <h3>Linux</h3>
-                    <p>Ubuntu, Fedora, Arch, and more</p>
-                    <span class="platform-status supported">✓ Fully Supported</span>
+                <div class="vim-content">
+                    <div class="line-numbers">
+                        <span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span><span>12</span><span>13</span><span>14</span><span>15</span>
+                    </div>
+                    <div class="code-content">
+                        <span class="keyword">[package]</span>
+                        <span class="key">name</span> = <span class="string">"complex_app"</span>
+                        <span class="key">version</span> = <span class="string">"0.1.0"</span>
+                        <span class="key">edition</span> = <span class="string">"2023"</span>
+
+                        <span class="keyword">[dependencies]</span>
+                        <span class="key">fmt</span> = <span class="string">"*"</span>
+                        <span class="key">boost</span> = <span class="string">"1.82"</span>
+
+                        <span class="keyword">[[bin]]</span>
+                        <span class="key">name</span> = <span class="string">"server"</span>
+                        <span class="key">path</span> = <span class="string">"src/server.cpp"</span>
+
+                        <span class="keyword">[lib]</span>
+                        <span class="key">crate-type</span> = <span class="string">"staticlib"</span>
+                    </div>
                 </div>
-                <div class="platform-card">
-                    <span class="platform-icon">🪟</span>
-                    <h3>Windows</h3>
-                    <p>WSL and native support</p>
-                    <span class="platform-status partial">⚠️ Basic Support</span>
+                <div class="vim-status-bar">
+                    <span class="vim-mode">NORMAL</span>
+                    <span class="vim-file-info">rivet.toml [toml]</span>
+                    <span class="vim-cursor-pos">15:1</span>
                 </div>
             </div>
         </div>

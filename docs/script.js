@@ -1,137 +1,103 @@
 // Terminal Animation
 document.addEventListener('DOMContentLoaded', function () {
     animateInstallTerminal();
-    setupCommandTabs();
+    animateDemoTerminal();
     setupCodeCopy();
 });
 
+// Install Terminal Animation
 function animateInstallTerminal() {
-    const installCommand = document.getElementById('install-command');
-    if (!installCommand) return;
+    const outputDiv = document.getElementById('terminal-output');
+    if (!outputDiv) return;
 
     const steps = [
-        { text: '$ git clone https://github.com/fedres/Rivet.git', delay: 0 },
-        { output: 'Cloning into \'Rivet\'...', delay: 800, color: '#888' },
-        { output: 'remote: Enumerating objects: 1234, done.', delay: 1200, color: '#888' },
-        { output: 'remote: Counting objects: 100%', delay: 1500, color: '#888' },
-        { output: 'Receiving objects: 100% (1234/1234), 2.5 MiB | 5.0 MiB/s, done.', delay: 1800, color: '#888' },
-        { text: '$ cd Rivet/rivet', delay: 2200 },
-        { text: '$ cargo build --release', delay: 2600 },
-        { output: '   Compiling rivet-cli v0.1.0', delay: 3000, color: '#0f0' },
-        { output: '    Finished release [optimized] target(s) in 12.3s', delay: 4500, color: '#0f0' },
-        { text: '$ rivet --version', delay: 5000 },
-        { output: 'rivet 0.1.0', delay: 5300, color: '#0ff' },
-        { text: '$ rivet new my_project', delay: 5800 },
-        { output: '     Created binary (application) `my_project` package', delay: 6200, color: '#0f0' },
-        { text: '$ cd my_project && rivet build', delay: 6800 },
-        { output: '   Compiling my_project v0.1.0', delay: 7200, color: '#0f0' },
-        { output: '    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.5s', delay: 8000, color: '#0f0' },
-        { text: '$ rivet run', delay: 8500 },
-        { output: '     Running `target/debug/my_project`', delay: 8900, color: '#888' },
-        { output: 'Hello from Rivet!', delay: 9200, color: '#ff0' },
-        { success: '✨ Ready to build amazing C++ projects!', delay: 9800 }
+        { output: 'Detecting operating system... macOS (ARM64)', delay: 500, color: '#888' },
+        { output: 'Downloading Rivet v0.1.0...', delay: 1200, color: '#888' },
+        { output: 'Verifying GPG signature...', delay: 1800, color: '#888' },
+        { output: 'Installing to ~/.rivet/bin...', delay: 2400, color: '#888' },
+        { output: 'Adding to PATH...', delay: 2800, color: '#888' },
+        { success: '✨ Rivet installed successfully!', delay: 3200 }
     ];
-
-    const outputDiv = installCommand.closest('.terminal-content').querySelector('.terminal-output') ||
-        installCommand.closest('.install-terminal').querySelector('.terminal-output');
-
-    if (!outputDiv) return;
 
     let currentStep = 0;
 
     function typeStep() {
-        if (currentStep >= steps.length) {
-            setTimeout(() => {
-                currentStep = 0;
-                outputDiv.innerHTML = '';
-                typeStep();
-            }, 5000);
-            return;
-        }
+        if (currentStep >= steps.length) return;
 
         const step = steps[currentStep];
-
         setTimeout(() => {
-            if (step.text) {
-                const line = document.createElement('div');
-                line.className = 'terminal-line';
-                line.innerHTML = `<span class="prompt">$</span> <span class="command">${step.text}</span>`;
-                outputDiv.appendChild(line);
-            } else if (step.output) {
-                const line = document.createElement('div');
-                line.className = 'output-line';
-                line.style.color = step.color || '#888';
-                line.textContent = step.output;
-                outputDiv.appendChild(line);
-            } else if (step.success) {
-                const line = document.createElement('div');
-                line.className = 'output-line success';
-                line.textContent = step.success;
-                outputDiv.appendChild(line);
-            }
+            const line = document.createElement('div');
+            line.className = step.success ? 'output-line success' : 'output-line';
+            if (step.color) line.style.color = step.color;
+            line.textContent = step.output || step.success;
+            outputDiv.appendChild(line);
 
             outputDiv.scrollTop = outputDiv.scrollHeight;
             currentStep++;
             typeStep();
-        }, step.delay);
+        }, step.delay - (currentStep > 0 ? steps[currentStep - 1].delay : 0));
     }
 
     typeStep();
 }
 
-function setupCommandTabs() {
-    const tabs = document.querySelectorAll('.command-tab');
-    const commands = {
-        'new': {
-            command: 'rivet new my_project',
-            output: [
-                '     Created binary (application) `my_project` package',
-                '✨ Ready in 0.012s'
-            ]
-        },
-        'build': {
-            command: 'rivet build',
-            output: [
-                '   Compiling my_project v0.1.0',
-                '    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.8s'
-            ]
-        },
-        'install': {
-            command: 'rivet add boost',
-            output: [
-                '📦 Installing 1 dependencies...',
-                '   Installing boost...',
-                '✓ Dependencies installed successfully'
-            ]
-        },
-        'version': {
-            command: 'rivet --version',
-            output: [
-                'rivet 0.1.0'
-            ]
-        }
-    };
+// Live Build Demo Animation
+function animateDemoTerminal() {
+    const outputDiv = document.getElementById('demo-output');
+    if (!outputDiv) return;
 
-    tabs.forEach(tab => {
-        tab.addEventListener('click', function () {
-            tabs.forEach(t => t.classList.remove('active'));
-            this.classList.add('active');
+    const steps = [
+        { output: '📦 Discovering workspace members...', delay: 500, color: '#00ffff' },
+        { output: '  → mathlib', delay: 800 },
+        { output: '  → stringutils', delay: 1000 },
+        { output: '  → app', delay: 1200 },
+        { output: '🔨 Building workspace with 3 packages', delay: 1500, color: '#00ffff' },
 
-            const cmd = this.dataset.command;
-            const data = commands[cmd];
+        { output: '\nBuilding mathlib', delay: 2000, color: '#ff00ff' },
+        { output: '  Compiling library mathlib', delay: 2200 },
+        { output: '   Compiling ./mathlib/src/lib.cpp', delay: 2500, color: '#888' },
 
-            const commandEl = document.getElementById('current-command');
-            const outputEl = document.getElementById('command-output');
+        { output: '\nBuilding stringutils', delay: 3500, color: '#ff00ff' },
+        { output: '  Compiling library stringutils', delay: 3700 },
+        { output: '   Compiling ./stringutils/src/lib.cpp', delay: 4000, color: '#888' },
 
-            if (commandEl && outputEl && data) {
-                commandEl.textContent = data.command;
-                outputEl.innerHTML = data.output.map(line => {
-                    const className = line.includes('✓') || line.includes('✨') ? 'output-line success' : 'output-line';
-                    return `<div class="${className}">${line}</div>`;
-                }).join('');
+        { output: '\nBuilding app', delay: 5000, color: '#ff00ff' },
+        { output: '  Compiling binary calculator', delay: 5200 },
+        { output: '    Finished ./target/debug/calculator', delay: 6000, color: '#00ff88' },
+
+        { success: '\n✓ Build complete', delay: 6500 }
+    ];
+
+    let currentStep = 0;
+
+    function runAnimation() {
+        outputDiv.innerHTML = '';
+        currentStep = 0;
+
+        function typeStep() {
+            if (currentStep >= steps.length) {
+                setTimeout(runAnimation, 5000); // Loop after 5 seconds
+                return;
             }
-        });
-    });
+
+            const step = steps[currentStep];
+            setTimeout(() => {
+                const line = document.createElement('div');
+                line.className = step.success ? 'output-line success' : 'output-line';
+                if (step.color) line.style.color = step.color;
+                line.textContent = step.output || step.success;
+                outputDiv.appendChild(line);
+
+                outputDiv.scrollTop = outputDiv.scrollHeight;
+                currentStep++;
+                typeStep();
+            }, step.delay - (currentStep > 0 ? steps[currentStep - 1].delay : 0));
+        }
+
+        typeStep();
+    }
+
+    runAnimation();
 }
 
 function setupCodeCopy() {
@@ -150,11 +116,11 @@ function setupCodeCopy() {
 }
 
 function copyInstallCommand() {
-    const command = 'git clone https://github.com/fedres/Rivet.git && cd Rivet/rivet && cargo build --release';
+    const command = 'bash <(curl -sSL https://rivet.sh/install.sh)';
     navigator.clipboard.writeText(command).then(() => {
-        const button = event.target.closest('.copy-button');
+        const button = document.querySelector('.copy-button');
         const original = button.innerHTML;
-        button.innerHTML = '✓ Copied!';
+        button.innerHTML = '✓';
         setTimeout(() => button.innerHTML = original, 2000);
     });
 }
@@ -185,7 +151,7 @@ const observer = new IntersectionObserver((entries) => {
     });
 }, observerOptions);
 
-document.querySelectorAll('.feature-card, .command-group, .example-group, .platform-card').forEach(el => {
+document.querySelectorAll('.feature-card, .mini-terminal, .vim-editor, .platform-card').forEach(el => {
     el.style.opacity = '0';
     el.style.transform = 'translateY(20px)';
     el.style.transition = 'opacity 0.6s ease, transform 0.6s ease';

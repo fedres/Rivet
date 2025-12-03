@@ -8,6 +8,15 @@
     --success: #00ff88;
     --warning: #ffaa00;
     --danger: #ff4444;
+
+    /* Vim Colors */
+    --vim-bg: #1e1e1e;
+    --vim-fg: #d4d4d4;
+    --vim-keyword: #569cd6;
+    --vim-string: #ce9178;
+    --vim-number: #b5cea8;
+    --vim-comment: #6a9955;
+    --vim-key: #9cdcfe;
 }
 
 * {
@@ -117,8 +126,15 @@ body {
 }
 
 @keyframes glow {
-    0%, 100% { filter: brightness(1); }
-    50% { filter: brightness(1.3); }
+
+    0%,
+    100% {
+        filter: brightness(1);
+    }
+
+    50% {
+        filter: brightness(1.3);
+    }
 }
 
 .hero-subtitle {
@@ -127,16 +143,24 @@ body {
     margin-bottom: 3rem;
 }
 
-/* Terminal */
-.install-terminal {
+/* Terminal Styles */
+.install-terminal,
+.demo-terminal {
     background: rgba(26, 26, 46, 0.8);
     border: 1px solid rgba(0, 255, 255, 0.2);
     border-radius: 10px;
     overflow: hidden;
     margin: 2rem auto;
-    max-width: 700px;
     box-shadow: 0 10px 50px rgba(0, 255, 255, 0.1);
     position: relative;
+}
+
+.install-terminal {
+    max-width: 700px;
+}
+
+.demo-terminal {
+    max-width: 900px;
 }
 
 .terminal-header {
@@ -159,14 +183,24 @@ body {
     border-radius: 50%;
 }
 
-.dot.red { background: #ff5f56; }
-.dot.yellow { background: #ffbd2e; }
-.dot.green { background: #27c93f; }
+.dot.red {
+    background: #ff5f56;
+}
+
+.dot.yellow {
+    background: #ffbd2e;
+}
+
+.dot.green {
+    background: #27c93f;
+}
 
 .terminal-title {
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.875rem;
     color: var(--text-dim);
+    flex-grow: 1;
+    text-align: center;
 }
 
 .terminal-content {
@@ -175,6 +209,7 @@ body {
     font-size: 0.875rem;
     max-height: 500px;
     overflow-y: auto;
+    text-align: left;
 }
 
 .terminal-line {
@@ -199,8 +234,16 @@ body {
 }
 
 @keyframes blink {
-    0%, 49% { opacity: 1; }
-    50%, 100% { opacity: 0; }
+
+    0%,
+    49% {
+        opacity: 1;
+    }
+
+    50%,
+    100% {
+        opacity: 0;
+    }
 }
 
 .terminal-output {
@@ -210,6 +253,7 @@ body {
 .output-line {
     margin-bottom: 0.3rem;
     color: var(--text-dim);
+    white-space: pre-wrap;
 }
 
 .output-line.success {
@@ -218,9 +262,6 @@ body {
 }
 
 .copy-button {
-    position: absolute;
-    top: 1rem;
-    right: 1rem;
     background: rgba(0, 255, 255, 0.1);
     border: 1px solid rgba(0, 255, 255, 0.3);
     color: var(--primary);
@@ -228,6 +269,9 @@ body {
     border-radius: 5px;
     cursor: pointer;
     transition: all 0.3s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .copy-button:hover {
@@ -273,10 +317,17 @@ section {
 .section-title {
     font-size: 2.5rem;
     text-align: center;
-    margin-bottom: 3rem;
+    margin-bottom: 1rem;
     background: linear-gradient(135deg, var(--primary), var(--secondary));
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
+}
+
+.section-subtitle {
+    text-align: center;
+    color: var(--text-dim);
+    margin-bottom: 3rem;
+    font-size: 1.2rem;
 }
 
 /* Features Grid */
@@ -332,106 +383,96 @@ section {
     border: 1px solid rgba(0, 255, 255, 0.2);
 }
 
-/* Commands Section */
-.commands {
-    background: var(--background);
-}
-
-.command-groups {
+/* Interactive Terminals Grid */
+.terminals-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
     gap: 2rem;
 }
 
-.command-group {
-    background: rgba(26, 26, 46, 0.3);
-    border: 1px solid rgba(0, 255, 255, 0.1);
-    border-radius: 10px;
-    padding: 1.5rem;
-}
-
-.group-title {
-    color: var(--primary);
-    margin-bottom: 1rem;
-    font-size: 1.25rem;
-}
-
-.command-list {
-    list-style: none;
-}
-
-.command-list li {
-    padding: 0.75rem 0;
-    border-bottom: 1px solid rgba(0, 255, 255, 0.05);
-}
-
-.command-list li:last-child {
-    border-bottom: none;
-}
-
-.command-list code {
-    font-family: 'JetBrains Mono', monospace;
-    color: var(--success);
-    background: rgba(0, 0, 0, 0.3);
-    padding: 0.25rem 0.5rem;
-    border-radius: 3px;
-}
-
-/* Examples Section */
-.examples {
-    background: linear-gradient(180deg, rgba(26, 26, 46, 0.3), var(--background));
-}
-
-.example-group {
-    margin-bottom: 2rem;
-}
-
-.example-title {
-    color: var(--primary);
-    margin-bottom: 1rem;
-    font-size: 1.25rem;
-}
-
-.code-block {
+.mini-terminal {
     background: rgba(26, 26, 46, 0.8);
     border: 1px solid rgba(0, 255, 255, 0.2);
-    border-radius: 10px;
-    padding: 1.5rem;
-    overflow-x: auto;
-    cursor: pointer;
-    transition: all 0.3s;
-    position: relative;
+    border-radius: 8px;
+    overflow: hidden;
+    transition: transform 0.3s ease;
 }
 
-.code-block:hover {
-    border-color: rgba(0, 255, 255, 0.5);
-    box-shadow: 0 5px 20px rgba(0, 255, 255, 0.1);
+.mini-terminal:hover {
+    transform: translateY(-5px);
+    border-color: var(--primary);
 }
 
-.code-block code {
+/* Vim Editor Styles */
+.vim-editor {
+    background: var(--vim-bg);
+    border-radius: 8px;
+    overflow: hidden;
     font-family: 'JetBrains Mono', monospace;
-    color: var(--text);
-    font-size: 0.875rem;
-    line-height: 1.6;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    max-width: 800px;
+    margin: 0 auto;
+    border: 1px solid #333;
 }
 
-.copied-notification {
-    position: absolute;
-    top: 1rem;
-    right: 1rem;
-    background: var(--success);
-    color: var(--background);
-    padding: 0.5rem 1rem;
-    border-radius: 5px;
-    font-size: 0.875rem;
-    animation: fadeInOut 2s ease;
+.vim-header {
+    background: #2d2d2d;
+    padding: 5px 10px;
+    color: #ccc;
+    font-size: 0.9rem;
+    text-align: center;
 }
 
-@keyframes fadeInOut {
-    0% { opacity: 0; transform: translateY(-10px); }
-    20% { opacity: 1; transform: translateY(0); }
-    80% { opacity: 1; transform: translateY(0); }
-    100% { opacity: 0; transform: translateY(-10px); }
+.vim-content {
+    display: flex;
+    padding: 1rem 0;
+}
+
+.line-numbers {
+    display: flex;
+    flex-direction: column;
+    padding: 0 1rem;
+    color: #555;
+    border-right: 1px solid #333;
+    user-select: none;
+    text-align: right;
+}
+
+.code-content {
+    padding-left: 1rem;
+    color: var(--vim-fg);
+    white-space: pre;
+}
+
+.vim-status-bar {
+    background: var(--primary);
+    color: #000;
+    padding: 2px 10px;
+    display: flex;
+    justify-content: space-between;
+    font-weight: bold;
+    font-size: 0.9rem;
+}
+
+/* Syntax Highlighting */
+.keyword {
+    color: var(--vim-keyword);
+}
+
+.string {
+    color: var(--vim-string);
+}
+
+.number {
+    color: var(--vim-number);
+}
+
+.comment {
+    color: var(--vim-comment);
+}
+
+.key {
+    color: var(--vim-key);
 }
 
 /* Platform Support */
@@ -568,21 +609,21 @@ section {
     .hero-title {
         font-size: 2rem;
     }
-    
+
     .features-grid,
-    .command-groups,
+    .terminals-grid,
     .platform-grid {
         grid-template-columns: 1fr;
     }
-    
+
     .footer-content {
         grid-template-columns: 1fr;
     }
-    
+
     .footer-links {
         grid-template-columns: 1fr;
     }
-    
+
     .nav-links {
         gap: 1rem;
         font-size: 0.875rem;
