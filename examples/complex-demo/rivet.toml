@@ -1,0 +1,10 @@
+[package]
+name = "complex-demo-workspace"
+version = "0.1.0"
+
+[workspace]
+members = [
+    "mathlib",
+    "stringutils",
+    "app",
+]

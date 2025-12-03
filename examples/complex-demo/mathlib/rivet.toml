@@ -1,0 +1,8 @@
+[package]
+name = "mathlib"
+version = "0.1.0"
+
+[lib]
+name = "mathlib"
+path = "src/lib.cpp"
+crate-type = "staticlib"

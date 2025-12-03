@@ -1,0 +1,8 @@
+[package]
+name = "stringutils"
+version = "0.1.0"
+
+[lib]
+name = "stringutils"
+path = "src/lib.cpp"
+crate-type = "staticlib"
