@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# ─── Matrix ───────────────────────────────────────────────────────────────────
+
+jobs:
+  build:
+    name: ${{ matrix.os }} / ${{ matrix.preset }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Linux ──────────────────────────────────────────────────────────
+          - os: ubuntu-22.04
+            runner: ubuntu-22.04
+            preset: debug
+          - os: ubuntu-22.04
+            runner: ubuntu-22.04
+            preset: release
+          - os: ubuntu-22.04
+            runner: ubuntu-22.04
+            preset: asan
+          - os: ubuntu-24.04
+            runner: ubuntu-24.04
+            preset: release
+          # ── macOS ──────────────────────────────────────────────────────────
+          - os: macos-14
+            runner: macos-14
+            preset: debug
+          - os: macos-14
+            runner: macos-14
+            preset: release
+          - os: macos-13
+            runner: macos-13
+            preset: release
+          # ── Windows ────────────────────────────────────────────────────────
+          - os: windows-2022
+            runner: windows-2022
+            preset: debug
+          - os: windows-2022
+            runner: windows-2022
+            preset: release
+          - os: windows-2019
+            runner: windows-2019
+            preset: release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Linux toolchain ───────────────────────────────────────────────────
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build gcc-13 g++-13 clang-16 \
+            libseccomp-dev
+
+      # ── macOS toolchain ───────────────────────────────────────────────────
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja
+
+      # ── Windows toolchain (MSVC is pre-installed) ─────────────────────────
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # ── Configure ─────────────────────────────────────────────────────────
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      # ── Build ─────────────────────────────────────────────────────────────
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }} --parallel
+
+      # ── Test ──────────────────────────────────────────────────────────────
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }} --output-on-failure
+
+      # ── Upload artifacts on failure ───────────────────────────────────────
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}-${{ matrix.preset }}
+          path: build/${{ matrix.preset }}/Testing/
+
+  # ─── Sanitizer jobs (Linux only) ────────────────────────────────────────────
+  sanitizers:
+    name: ${{ matrix.preset }} / ubuntu-22.04
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [asan, tsan]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build gcc-13 g++-13 libseccomp-dev
+      - run: cmake --preset ${{ matrix.preset }}
+      - run: cmake --build --preset ${{ matrix.preset }} --parallel
+      - run: ctest --preset ${{ matrix.preset }} --output-on-failure
