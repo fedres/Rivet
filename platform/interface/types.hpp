@@ -3,10 +3,17 @@
 #pragma once
 
 #include <filesystem>
+#include <span>
 #include <string>
 #include <string_view>
 #include <cstdint>
 #include <cstddef>
+
+#if defined(_WIN32)
+#  include <windows.h>
+#elif defined(__unix__) || defined(__APPLE__)
+#  include <unistd.h>
+#endif
 
 namespace rivet {
 
@@ -15,17 +22,14 @@ namespace rivet {
 using Path = std::filesystem::path;
 
 // Non-owning byte span.
-#include <span>
-using ByteSpan = std::span<const std::byte>;
+using ByteSpan    = std::span<const std::byte>;
 using MutByteSpan = std::span<std::byte>;
 
 // Platform opaque handle types.
 #if defined(_WIN32)
-    #include <windows.h>
     using NativeHandle = HANDLE;
     using NativePid    = DWORD;
 #else
-    #include <unistd.h>
     using NativeHandle = int;   // file descriptor
     using NativePid    = pid_t;
 #endif

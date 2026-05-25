@@ -1,0 +1,16 @@
+cpp-httplib vendored header placeholder.
+HTTP/HTTPS client used in rivet::net.
+Requires mbedTLS (or OpenSSL) for TLS support.
+
+Populate with the single-header release:
+  https://github.com/yhirose/cpp-httplib/releases
+
+Expected file after populating:
+  httplib.h
+
+Pinned version: 0.15.3
+License: MIT
+
+Usage:
+  #define CPPHTTPLIB_OPENSSL_SUPPORT  // or CPPHTTPLIB_MBEDTLS_SUPPORT
+  #include "../../vendor/cpp-httplib/httplib.h"

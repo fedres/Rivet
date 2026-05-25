@@ -71,17 +71,40 @@ else()
 endif()
 
 # ─── Runtime core ─────────────────────────────────────────────────────────────
+# rivet_runtime: all non-main runtime sources, linked by both the binary and tests.
 
-add_executable(rivet
-    runtime/main.cpp
+add_library(rivet_runtime STATIC
     runtime/cli/cli.cpp
+
+    # Build IR layer
+    runtime/build/graph.cpp
+    runtime/build/scheduler.cpp
+    runtime/build/executor.cpp
+
+    # Cache layer
+    runtime/cache/key.cpp
+    runtime/cache/store.cpp
+
+    # Package management
+    runtime/package/manifest.cpp
+    runtime/package/lockfile.cpp
+
+    # Toolchain
+    runtime/toolchain/discovery.cpp
+    runtime/toolchain/compile.cpp
+
+    # Daemon (stub)
+    runtime/daemon/daemon.cpp
+
+    # Modules (stub)
+    runtime/modules/scanner.cpp
 )
 
-target_link_libraries(rivet PRIVATE rivet_pal)
+target_link_libraries(rivet_runtime PUBLIC rivet_pal)
+target_include_directories(rivet_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_include_directories(rivet PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-)
+add_executable(rivet runtime/main.cpp)
+target_link_libraries(rivet PRIVATE rivet_runtime)
 
 # On macOS: set rpath so the binary can find bundled dylibs after installation.
 if(RIVET_PLATFORM_MACOS)

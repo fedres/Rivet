@@ -1,0 +1,11 @@
+simdjson vendored library placeholder.
+Populate with the single-header + single-source release:
+  https://github.com/simdjson/simdjson/releases
+
+Expected files after populating:
+  simdjson.h
+  simdjson.cpp
+
+Pinned version: 3.8.0
+SHA-256 of simdjson-3.8.0.tar.gz:
+  (update after downloading)

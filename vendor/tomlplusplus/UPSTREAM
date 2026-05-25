@@ -1,0 +1,13 @@
+toml++ vendored header placeholder.
+Populate with the single-header release:
+  https://github.com/marzer/tomlplusplus/releases
+
+Expected file after populating:
+  toml.hpp    ← the single-header amalgamation
+
+Pinned version: 3.4.0
+SHA-256 of toml.hpp:
+  (update after downloading)
+
+Usage in code:
+  #include "../../vendor/tomlplusplus/toml.hpp"

@@ -1,0 +1,12 @@
+sqlite3 amalgamation placeholder.
+Populate this directory with the official SQLite amalgamation release:
+  https://www.sqlite.org/download.html  →  sqlite-amalgamation-XXXXXXX.zip
+
+Expected files after unpopulating:
+  sqlite3.h
+  sqlite3.c
+  shell.c  (optional, for sqlite3 CLI)
+
+Pinned version: 3.45.0 (2024-01-15)
+SHA-256 of sqlite-amalgamation-3450000.zip:
+  (update this after downloading)

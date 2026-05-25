@@ -1,0 +1,17 @@
+mbedTLS vendored library placeholder.
+Used for TLS in the HTTP client (rivet::net).
+
+Populate with the official release:
+  https://github.com/Mbed-TLS/mbedtls/releases
+
+Expected layout after populating:
+  include/mbedtls/
+    ssl.h, net_sockets.h, entropy.h, ctr_drbg.h, x509_crt.h, ...
+  library/
+    *.c files from the mbedtls library/ directory
+
+Pinned version: 3.5.0
+License: Apache 2.0
+
+Build note: add library/*.c to the rivet_pal or rivet_runtime SOURCES list
+            and include/mbedtls to the include directories.

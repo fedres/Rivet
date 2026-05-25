@@ -1,0 +1,14 @@
+zstd vendored library placeholder.
+Populate with the official release:
+  https://github.com/facebook/zstd/releases
+
+Expected layout after populating:
+  lib/
+    zstd.h
+    zstd.c    (single-file build via zstd/build/single_file_libs/)
+  LICENSE
+  CHANGELOG
+
+Pinned version: 1.5.5
+SHA-256 of zstd-1.5.5.tar.gz:
+  9c4396cc829cfae319a6e2615202e82aad41372073482fce286fac78646d3ee4

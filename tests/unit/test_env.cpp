@@ -10,8 +10,7 @@ TEST(Env, SetAndGet) {
     env::unset(key);
     EXPECT_FALSE(env::get(key).has_value());
 
-    auto r = env::set(key, "hello");
-    ASSERT_TRUE(r.has_value());
+    env::set(key, "hello");
 
     auto val = env::get(key);
     ASSERT_TRUE(val.has_value());

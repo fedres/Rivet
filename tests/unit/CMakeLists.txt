@@ -1,2 +1,5 @@
-rivet_add_test(test_result  test_result.cpp)
-rivet_add_test(test_env     test_env.cpp)
+rivet_add_test(test_result    test_result.cpp)
+rivet_add_test(test_env       test_env.cpp)
+rivet_add_test(test_graph     test_graph.cpp)
+rivet_add_test(test_cache_key test_cache_key.cpp)
+rivet_add_test(test_manifest  test_manifest.cpp)

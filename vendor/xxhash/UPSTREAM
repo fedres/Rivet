@@ -1,0 +1,11 @@
+xxhash vendored library placeholder.
+Populate with the official release:
+  https://github.com/Cyan4973/xxHash/releases
+
+Expected files after populating:
+  xxhash.h     ← header
+  xxhash.c     ← implementation (or use header-only mode with XXH_STATIC_LINKING_ONLY)
+
+Pinned version: 0.8.2
+SHA-256 of xxhash-0.8.2.tar.bz2:
+  baee0c6afd4f03165de7a4e67988d16f0f2b257b51d0e3cb91909302a26a679c

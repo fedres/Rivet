@@ -19,7 +19,7 @@ include(GoogleTest)
 
 function(rivet_add_test name)
     add_executable(${name} ${ARGN})
-    target_link_libraries(${name} PRIVATE rivet_pal GTest::gtest_main)
+    target_link_libraries(${name} PRIVATE rivet_runtime rivet_pal GTest::gtest_main)
     target_include_directories(${name} PRIVATE ${CMAKE_SOURCE_DIR})
     gtest_discover_tests(${name})
 endfunction()

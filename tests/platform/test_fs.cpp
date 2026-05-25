@@ -39,9 +39,9 @@ TEST_F(FsTest, ExistsAndNotExists) {
 TEST_F(FsTest, WriteAtomicAndReadBack) {
     auto dest = p("atomic.txt");
     std::string content = "hello rivet\n";
-    std::vector<std::byte> bytes(content.begin(), content.end());
 
-    auto wr = fs::write_atomic(dest, bytes);
+    auto wr = fs::write_atomic(dest,
+        rivet::ByteSpan{reinterpret_cast<const std::byte*>(content.data()), content.size()});
     ASSERT_TRUE(wr.has_value()) << wr.error().message;
 
     auto rd = fs::read_file(dest);
@@ -56,8 +56,8 @@ TEST_F(FsTest, RenameAtomicReplacesTarget) {
     auto src  = p("src.txt");
     auto dst  = p("dst.txt");
 
-    std::vector<std::byte> data_a{'a'};
-    std::vector<std::byte> data_b{'b'};
+    std::vector<std::byte> data_a{std::byte{'a'}};
+    std::vector<std::byte> data_b{std::byte{'b'}};
     ASSERT_TRUE(fs::write_atomic(src, data_a).has_value());
     ASSERT_TRUE(fs::write_atomic(dst, data_b).has_value());
 
@@ -86,7 +86,7 @@ TEST_F(FsTest, ListDir) {
 TEST_F(FsTest, CreateAndReadSymlink) {
     auto target = p("target.txt");
     auto link   = p("link.txt");
-    std::vector<std::byte> data{'x'};
+    std::vector<std::byte> data{std::byte{'x'}};
     ASSERT_TRUE(fs::write_atomic(target, data).has_value());
 
     auto rc = fs::create_symlink(target, link);
@@ -103,7 +103,7 @@ TEST_F(FsTest, CreateAndReadSymlink) {
 TEST_F(FsTest, UnicodePath) {
     // U+4E2D U+6587 = "中文"
     Path upath = test_dir / u8"中文_file.txt";
-    std::vector<std::byte> data{'u', '8'};
+    std::vector<std::byte> data{std::byte{'u'}, std::byte{'8'}};
     auto wr = fs::write_atomic(upath, data);
     ASSERT_TRUE(wr.has_value()) << wr.error().message;
     EXPECT_TRUE(fs::exists(upath).value_or(false));
@@ -118,7 +118,7 @@ TEST_F(FsTest, StatReturnsSize) {
 
     auto st = fs::stat(f);
     ASSERT_TRUE(st.has_value()) << st.error().message;
-    EXPECT_EQ(st->size, 128u);
+    EXPECT_EQ(st->size_bytes, 128u);
 }
 
 // ─── Concurrent writes (no data corruption) ──────────────────────────────────

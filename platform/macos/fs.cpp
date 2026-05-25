@@ -16,8 +16,11 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <AvailabilityMacros.h>
+#include <ftw.h>
 
 namespace rivet::fs {
+
+using rivet::propagate;
 
 namespace {
     Error errno_error(std::string_view ctx) {
@@ -88,7 +91,7 @@ Result<void> create_dir(const Path& p) {
 Result<void> create_dirs(const Path& p) {
     auto parent = p.parent_path();
     if (!parent.empty() && parent != p) {
-        auto r = exists(parent);
+        auto r = rivet::fs::exists(parent);
         if (r && !*r) RIVET_TRY(create_dirs(parent));
     }
     return create_dir(p);
@@ -107,8 +110,18 @@ Result<void> remove_dir(const Path& p) {
 }
 
 Result<void> remove_all(const Path& p) {
-    (void)p;
-    return make_error("remove_all: not yet implemented");
+    // Use nftw to walk the tree depth-first and remove files + dirs.
+    std::string root = p.string();
+    int rc = ::nftw(root.c_str(),
+        [](const char* fpath, const struct stat* /*sb*/, int typeflag, struct FTW* /*ftwbuf*/) -> int {
+            if (typeflag == FTW_DP || typeflag == FTW_D)
+                return ::rmdir(fpath);
+            return ::unlink(fpath);
+        },
+        64 /*nopenfd*/, FTW_DEPTH | FTW_PHYS);
+    if (rc != 0)
+        return make_error(std::string("remove_all: ") + std::strerror(errno), errno);
+    return {};
 }
 
 Result<void> copy_file(const Path& from, const Path& to) {
@@ -187,11 +200,11 @@ Result<std::vector<std::byte>> read_file(const Path& p) {
 Result<void> write_atomic(const Path& dest, ByteSpan data) {
     auto tmp = temp_path_near(dest);
     auto fh  = open(tmp, OpenMode::Write | OpenMode::Create | OpenMode::Truncate);
-    if (!fh) return propagate(fh);
+    if (!fh) return rivet::propagate<void>(fh);
     size_t written = 0;
     while (written < data.size()) {
         auto n = fh->write(ByteSpan{data.data() + written, data.size() - written});
-        if (!n) return propagate(n);
+        if (!n) return rivet::propagate<void>(n);
         written += *n;
     }
     RIVET_TRY(fh->fsync());

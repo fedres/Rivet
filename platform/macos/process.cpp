@@ -27,6 +27,22 @@ bool CancellationToken::is_cancelled() const { return impl_->cancelled.load(std:
 ChildProcess::~ChildProcess() {
     if (pid_ > 0) { int s; ::waitpid(pid_, &s, WNOHANG); }
 }
+ChildProcess::ChildProcess(ChildProcess&& o) noexcept
+    : pid_(o.pid_), handle_(o.handle_),
+      stdout_buf_(std::move(o.stdout_buf_)), stderr_buf_(std::move(o.stderr_buf_))
+{
+    o.pid_ = {}; o.handle_ = {};
+}
+ChildProcess& ChildProcess::operator=(ChildProcess&& o) noexcept {
+    if (this != &o) {
+        if (pid_ > 0) { int s; ::waitpid(pid_, &s, WNOHANG); }
+        pid_ = o.pid_; handle_ = o.handle_;
+        stdout_buf_ = std::move(o.stdout_buf_);
+        stderr_buf_ = std::move(o.stderr_buf_);
+        o.pid_ = {}; o.handle_ = {};
+    }
+    return *this;
+}
 bool ChildProcess::is_running() const { return pid_ > 0 && ::kill(pid_, 0) == 0; }
 Result<int> ChildProcess::wait() {
     if (pid_ <= 0) return make_error<int>("wait: invalid pid");
