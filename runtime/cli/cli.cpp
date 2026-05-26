@@ -1313,13 +1313,14 @@ int cmd_toolchain(const Context& ctx) {
         tar_opts.capture_stderr  = true;
 
         auto child_r = rivet::process::spawn(std::move(tar_opts));
-        (void)rivet::fs::remove_file(tmp_archive);
         if (!child_r) {
+            (void)rivet::fs::remove_file(tmp_archive);
             std::cerr << "error: extraction failed: " << child_r.error().message << "\n";
             return 1;
         }
 
         auto wait_r = child_r->wait();
+        (void)rivet::fs::remove_file(tmp_archive);
         if (!wait_r || *wait_r != 0) {
             std::cerr << std::format("error: extraction failed (exit {})\n",
                 wait_r.value_or(-1));
@@ -1606,14 +1607,15 @@ int cmd_self_update(const Context& /*ctx*/) {
     tar_opts.capture_stderr = true;
 
     auto child_r = rivet::process::spawn(std::move(tar_opts));
-    (void)rivet::fs::remove_file(tmp_archive);
     if (!child_r) {
+        (void)rivet::fs::remove_file(tmp_archive);
         std::cerr << "error: extraction failed: " << child_r.error().message << "\n";
         return 1;
     }
 
     // Write the extracted binary bytes atomically next to the running exe.
     auto wait_r = child_r->wait();
+    (void)rivet::fs::remove_file(tmp_archive);
     if (!wait_r || *wait_r != 0) {
         std::cerr << std::format("error: tar exited {}\n", wait_r.value_or(-1));
         return 1;
