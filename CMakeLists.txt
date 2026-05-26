@@ -69,36 +69,37 @@ configure_file(
 option(RIVET_VENDOR_FETCH "Download vendored SQLite3 if absent (network required on first configure)" ON)
 
 if(RIVET_VENDOR_FETCH)
-    include(FetchContent)
-    cmake_policy(SET CMP0135 NEW)
-
-    # ── toml++ v3.4.0 (header-only) ─────────────────────────────────────────────
-    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/tomlplusplus/toml.hpp")
-        FetchContent_Declare(tomlplusplus
-            GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
-            GIT_TAG        v3.4.0
-            GIT_SHALLOW    TRUE
-        )
-        FetchContent_Populate(tomlplusplus)
-        file(MAKE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/vendor/tomlplusplus")
-        file(COPY "${tomlplusplus_SOURCE_DIR}/toml.hpp"
-             DESTINATION "${CMAKE_CURRENT_SOURCE_DIR}/vendor/tomlplusplus")
-        message(STATUS "Vendored toml++ v3.4.0 → vendor/tomlplusplus/toml.hpp")
-    endif()
-
-    # ── SQLite 3.45.2 amalgamation ───────────────────────────────────────────────
+    # ── SQLite 3.45.2 amalgamation ─────────────────────────────────────────────
+    # Direct download + extract: avoids FetchContent_Populate (deprecated CMake 3.30+)
+    # and the implicit add_subdirectory of FetchContent_MakeAvailable.
     if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/sqlite/sqlite3.h")
-        FetchContent_Declare(sqlite3_amal
-            URL https://www.sqlite.org/2024/sqlite-amalgamation-3450200.zip
-            DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-        )
-        FetchContent_Populate(sqlite3_amal)
-        file(MAKE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/vendor/sqlite")
-        file(COPY
-            "${sqlite3_amal_SOURCE_DIR}/sqlite3.h"
-            "${sqlite3_amal_SOURCE_DIR}/sqlite3.c"
-            DESTINATION "${CMAKE_CURRENT_SOURCE_DIR}/vendor/sqlite")
-        message(STATUS "Vendored SQLite 3.45.2 → vendor/sqlite/")
+        set(_SQLITE_URL "https://www.sqlite.org/2024/sqlite-amalgamation-3450200.zip")
+        set(_SQLITE_ZIP "${CMAKE_BINARY_DIR}/_rivet_sqlite.zip")
+        set(_SQLITE_EXTRACT_DIR "${CMAKE_BINARY_DIR}/_rivet_sqlite_extract")
+        message(STATUS "Downloading SQLite amalgamation from ${_SQLITE_URL}")
+        file(DOWNLOAD "${_SQLITE_URL}" "${_SQLITE_ZIP}"
+             STATUS _DL_STATUS
+             TLS_VERIFY ON
+             SHOW_PROGRESS)
+        list(GET _DL_STATUS 0 _DL_CODE)
+        if(_DL_CODE EQUAL 0)
+            file(MAKE_DIRECTORY "${_SQLITE_EXTRACT_DIR}")
+            file(ARCHIVE_EXTRACT
+                INPUT "${_SQLITE_ZIP}"
+                DESTINATION "${_SQLITE_EXTRACT_DIR}")
+            file(MAKE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/vendor/sqlite")
+            file(GLOB _SQ_FILES
+                "${_SQLITE_EXTRACT_DIR}/sqlite-amalgamation-*/sqlite3.c"
+                "${_SQLITE_EXTRACT_DIR}/sqlite-amalgamation-*/sqlite3.h")
+            foreach(_f ${_SQ_FILES})
+                file(COPY "${_f}"
+                     DESTINATION "${CMAKE_CURRENT_SOURCE_DIR}/vendor/sqlite")
+            endforeach()
+            message(STATUS "Vendored SQLite → vendor/sqlite/")
+        else()
+            list(GET _DL_STATUS 1 _DL_MSG)
+            message(WARNING "SQLite download failed: ${_DL_MSG}; cache will run in stub mode")
+        endif()
     endif()
 endif()
 
