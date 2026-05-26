@@ -12,6 +12,8 @@
 #include "../cache/key.hpp"
 #include "../package/manifest.hpp"
 #include "../package/lockfile.hpp"
+#include "../package/default_sources.hpp"
+#include "../package/resolver.hpp"
 #include "../toolchain/discovery.hpp"
 #include "../toolchain/compile.hpp"
 #include "../daemon/daemon.hpp"
@@ -658,28 +660,27 @@ int cmd_add(const Context& ctx) {
     }
     auto manifest = *manifest_r;
 
-    // If no version given, query registry for latest.
-    if (pkg_version.empty()) {
-        std::cout << std::format("Resolving {}...\n", pkg_name);
+    // Resolve through the SourceRegistry (vcpkg by default, plus local/git
+    // overrides). Falls back to "*" if every source fails — the user can
+    // pin manually.
+    auto home_r = rivet::env::rivet_home();
+    Path rivet_home_path = home_r ? *home_r : Path{".rivet"};
+    auto registry = rivet::pkg::make_default_registry(rivet_home_path);
 
-        std::string registry_base =
-            rivet::env::get("RIVET_REGISTRY_URL")
-                .value_or("https://registry.cx.dev");
-        std::string url_str = registry_base + "/api/v1/packages/" + pkg_name;
+    rivet::pkg::PackageRef ref;
+    ref.name               = pkg_name;
+    ref.version_constraint = pkg_version.empty() ? "*" : pkg_version;
 
-        (void)rivet::net::init_tls_trust_store();
-        if (auto url_r = rivet::net::Url::parse(url_str)) {
-            if (auto resp = rivet::net::http_get(*url_r); resp && resp->ok()) {
-                auto body = resp->body_str();
-                pkg_version = json_str(body, "version");
-            }
-        }
-
-        if (pkg_version.empty()) {
-            std::cout << "note: registry not reachable — pinning to '*' (any version).\n"
-                      << "      Update rivet.toml manually when a version is known.\n";
-            pkg_version = "*";
-        }
+    std::cout << std::format("Resolving {} via vcpkg...\n", pkg_name);
+    if (auto resolved = registry.resolve(ref)) {
+        pkg_version = resolved->version;
+        std::cout << std::format("  Found {} {} ({})\n",
+            resolved->name, resolved->version, resolved->source_id);
+    } else if (pkg_version.empty()) {
+        std::cout << std::format("note: could not resolve {}: {}\n",
+            pkg_name, resolved.error().message);
+        std::cout << "      pinning to '*' (any version) — edit rivet.toml to refine.\n";
+        pkg_version = "*";
     }
 
     bool updating = manifest.dependencies.count(pkg_name) > 0;
@@ -700,9 +701,14 @@ int cmd_add(const Context& ctx) {
         return 1;
     }
 
-    // Regenerate lock file.
-    if (auto lock_r = rivet::pkg::resolve(manifest)) {
+    // Regenerate lock file via the new multi-source resolver.
+    rivet::pkg::Resolver r{registry};
+    if (auto lock_r = r.resolve(manifest)) {
         (void)rivet::pkg::write_lockfile(*lock_r, manifest.root_dir / "rivet.lock");
+    } else if (auto stub = rivet::pkg::resolve(manifest)) {
+        // Fall back to flat lockfile if vcpkg is unreachable so `add` still
+        // updates rivet.lock entries the user can inspect.
+        (void)rivet::pkg::write_lockfile(*stub, manifest.root_dir / "rivet.lock");
     }
 
     std::cout << std::format("  {} \"{}\" written to rivet.toml\n", pkg_name, pkg_version);

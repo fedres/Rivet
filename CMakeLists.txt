@@ -183,6 +183,7 @@ add_library(rivet_runtime STATIC
     runtime/package/sources/local.cpp
     runtime/package/sources/git.cpp
     runtime/package/sources/vcpkg.cpp
+    runtime/package/default_sources.cpp
     runtime/common/json.cpp
 
     # Toolchain
