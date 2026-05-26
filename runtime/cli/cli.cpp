@@ -493,18 +493,88 @@ int cmd_test(const Context& ctx) {
 
 // ─── cmd_run ─────────────────────────────────────────────────────────────────
 
+// Run a user-defined [scripts] entry from rivet.toml.
+//   sh -c "<command> $@" -- <extra args after `--`>     (POSIX)
+//   cmd /c "<command>"                                   (Windows)
+static int run_script(const rivet::pkg::Manifest& manifest,
+                       std::string_view name,
+                       std::string_view command,
+                       const std::vector<std::string_view>& args) {
+    rivet::process::SpawnOptions opts;
+    opts.working_dir = manifest.root_dir;
+    opts.inherit_env = true;
+
+    // Collect args after `--` (npm/bun convention).
+    std::vector<std::string> passthrough;
+    bool past_sep = false;
+    for (size_t i = 1; i < args.size(); ++i) {
+        if (args[i] == "--") { past_sep = true; continue; }
+        if (past_sep) passthrough.emplace_back(args[i]);
+    }
+
+#if defined(_WIN32)
+    opts.args.push_back("cmd");
+    opts.args.push_back("/c");
+    std::string combined{command};
+    for (const auto& a : passthrough) { combined += " "; combined += a; }
+    opts.args.push_back(combined);
+#else
+    opts.args.push_back("sh");
+    opts.args.push_back("-c");
+    // Use $@ + a leading sentinel so passthrough args become positional.
+    std::string full{command};
+    full += " \"$@\"";
+    opts.args.push_back(full);
+    opts.args.push_back("rivet-run");  // $0
+    for (auto& a : passthrough) opts.args.push_back(std::move(a));
+#endif
+
+    std::cout << "$ " << name << ": " << command << "\n";
+
+    auto child = rivet::process::spawn(std::move(opts));
+    if (!child) {
+        std::cerr << "error: " << child.error().message << "\n";
+        return 1;
+    }
+    auto code = child->wait();
+    return code.value_or(1);
+}
+
 int cmd_run(const Context& ctx) {
+    auto args = ctx.args_after_subcommand();
+
+    // Load manifest first so we can dispatch to a script if applicable.
+    auto cwd_opt = rivet::env::get("PWD");
+    Path cwd = cwd_opt ? Path{*cwd_opt} : Path{"."};
+    auto manifest_r = rivet::pkg::find_and_parse(cwd);
+    if (!manifest_r) {
+        std::cerr << "error: " << manifest_r.error().message << "\n";
+        return 1;
+    }
+    const auto& manifest = *manifest_r;
+
+    // `rivet run` with no name: list available scripts (npm-style).
+    if (args.empty() && !manifest.scripts.empty()) {
+        std::cout << "Available scripts:\n";
+        for (const auto& [n, c] : manifest.scripts)
+            std::cout << "  " << n << "  " << c << "\n";
+        std::cout << "\nRun a script:  rivet run <name>\n";
+        std::cout << "Run the binary: rivet run --bin\n";
+        return 0;
+    }
+
+    // If the first non-flag arg matches a script name, run it.
+    if (!args.empty()) {
+        std::string first{args[0]};
+        auto it = manifest.scripts.find(first);
+        if (it != manifest.scripts.end())
+            return run_script(manifest, it->first, it->second, args);
+    }
+
     // Build first.
     int build_rc = cmd_build(ctx);
     if (build_rc != 0) return build_rc;
 
-    auto cwd_opt = rivet::env::get("PWD");
-    Path cwd = cwd_opt ? Path{*cwd_opt} : Path{"."};
-    auto manifest_r = rivet::pkg::find_and_parse(cwd);
-    if (!manifest_r) return 1;
-    const auto& manifest = *manifest_r;
-
-    auto args    = ctx.args_after_subcommand();
     auto profile = std::string{flag_value(args, "--profile").value_or("debug")};
     auto binary  = manifest.root_dir / ".rivet" / "build" / profile / "bin" / manifest.name;
 

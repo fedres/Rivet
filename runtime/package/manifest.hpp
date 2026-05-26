@@ -96,6 +96,12 @@ struct Manifest {
     // [profiles.*]
     std::unordered_map<std::string, Profile> profiles;
 
+    // [scripts]
+    // Free-form commands invoked via `rivet run <name>` — npm/bun-style DX.
+    // Commands are executed by the shell with the manifest dir as CWD and
+    // <rivet_home>/bin prepended to PATH (so dep binaries are reachable).
+    std::unordered_map<std::string, std::string> scripts;
+
     // Absolute path to the directory containing this rivet.toml.
     Path root_dir;
 };

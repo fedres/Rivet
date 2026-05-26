@@ -110,18 +110,113 @@ Result<Manifest> parse_manifest(const Path& path) {
     Manifest m;
     m.root_dir = path.parent_path();
 
+    auto str_of = [](const toml::table* t, const char* k,
+                     const std::string& def = {}) -> std::string {
+        if (!t) return def;
+        if (auto* v = t->get_as<std::string>(k)) return v->get();
+        return def;
+    };
+
     if (auto* pkg = tbl.get_as<toml::table>("package")) {
-        auto str = [&](const char* k, const std::string& def = {}) -> std::string {
-            if (auto* v = pkg->get_as<std::string>(k)) return v->get();
-            return def;
-        };
-        m.name        = str("name");
-        m.version     = str("version");
-        m.description = str("description");
-        m.license     = str("license");
-        m.homepage    = str("homepage");
-        m.repository  = str("repository");
+        m.name        = str_of(pkg, "name");
+        m.version     = str_of(pkg, "version");
+        m.description = str_of(pkg, "description");
+        m.license     = str_of(pkg, "license");
+        m.homepage    = str_of(pkg, "homepage");
+        m.repository  = str_of(pkg, "repository");
+        m.readme      = str_of(pkg, "readme");
+        if (auto* a = pkg->get_as<toml::array>("authors")) {
+            for (const auto& v : *a)
+                if (auto s = v.value<std::string>()) m.authors.push_back(*s);
+        }
+        if (auto* a = pkg->get_as<toml::array>("keywords")) {
+            for (const auto& v : *a)
+                if (auto s = v.value<std::string>()) m.keywords.push_back(*s);
+        }
     }
+
+    if (auto* build = tbl.get_as<toml::table>("build")) {
+        auto sys = str_of(build, "system", "rivet");
+        if      (sys == "cmake")    m.build.system = BuildSystem::CMake;
+        else if (sys == "make")     m.build.system = BuildSystem::Make;
+        else if (sys == "autoconf") m.build.system = BuildSystem::Autoconf;
+        else if (sys == "meson")    m.build.system = BuildSystem::Meson;
+        else if (sys == "custom")   m.build.system = BuildSystem::Custom;
+        else                        m.build.system = BuildSystem::Rivet;
+        m.build.cxx_std = str_of(build, "cxx_std", "c++23");
+        if (auto* a = build->get_as<toml::array>("targets")) {
+            for (const auto& v : *a)
+                if (auto s = v.value<std::string>()) m.build.targets.push_back(*s);
+        }
+        if (auto* a = build->get_as<toml::array>("extra_flags")) {
+            for (const auto& v : *a)
+                if (auto s = v.value<std::string>()) m.build.extra_flags.push_back(*s);
+        }
+    }
+
+    auto parse_deps = [&](const toml::table* deps, auto& dest) {
+        if (!deps) return;
+        for (const auto& [k, v] : *deps) {
+            DepSpec spec;
+            std::string name{k.str()};
+            if (auto s = v.value<std::string>()) {
+                // Shorthand: dep = "1.2"
+                spec.kind    = DepKind::Registry;
+                spec.version = *s;
+            } else if (auto* t = v.as_table()) {
+                spec.version = str_of(t, "version");
+                if (auto p = str_of(t, "path"); !p.empty()) {
+                    spec.kind = DepKind::Path;
+                    spec.local_path = Path{p};
+                } else if (auto g = str_of(t, "git"); !g.empty()) {
+                    spec.kind    = DepKind::Git;
+                    spec.git_url = g;
+                    spec.git_ref = str_of(t, "rev");
+                    if (spec.git_ref.empty()) spec.git_ref = str_of(t, "branch");
+                    if (spec.git_ref.empty()) spec.git_ref = str_of(t, "tag");
+                } else {
+                    spec.kind = DepKind::Registry;
+                }
+                if (auto* fa = t->get_as<toml::array>("features")) {
+                    for (const auto& fv : *fa)
+                        if (auto fs = fv.value<std::string>()) spec.features.push_back(*fs);
+                }
+                if (auto b = t->get_as<bool>("static")) spec.static_link = b->get();
+            }
+            dest[name] = std::move(spec);
+        }
+    };
+    parse_deps(tbl.get_as<toml::table>("dependencies"),     m.dependencies);
+    parse_deps(tbl.get_as<toml::table>("dev-dependencies"), m.dev_dependencies);
+
+    if (auto* scripts = tbl.get_as<toml::table>("scripts")) {
+        for (const auto& [k, v] : *scripts)
+            if (auto s = v.value<std::string>())
+                m.scripts[std::string{k.str()}] = *s;
+    }
+
+    if (auto* profiles = tbl.get_as<toml::table>("profiles")) {
+        for (const auto& [k, v] : *profiles) {
+            auto* prof_tbl = v.as_table();
+            if (!prof_tbl) continue;
+            Profile prof;
+            prof.name = std::string{k.str()};
+            if (auto opt = prof_tbl->get_as<int64_t>("opt_level"))
+                prof.opt_level = static_cast<int>(opt->get());
+            if (auto d = prof_tbl->get_as<bool>("debug")) prof.debug = d->get();
+            if (auto l = prof_tbl->get_as<bool>("lto"))   prof.lto   = l->get();
+            if (auto* a = prof_tbl->get_as<toml::array>("sanitizers")) {
+                for (const auto& sv : *a)
+                    if (auto s = sv.value<std::string>()) prof.sanitizers.push_back(*s);
+            }
+            if (auto* a = prof_tbl->get_as<toml::array>("extra_flags")) {
+                for (const auto& sv : *a)
+                    if (auto s = sv.value<std::string>()) prof.extra_flags.push_back(*s);
+            }
+            m.profiles[prof.name] = std::move(prof);
+        }
+    }
+
     return m;
 
 #else

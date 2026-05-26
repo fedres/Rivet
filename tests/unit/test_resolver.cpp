@@ -90,7 +90,7 @@ TEST_F(ResolverTest, DeduplicatesSharedDep) {
     auto leaf = make_pkg("leaf", "1.0.0");
     auto leaf_dep =
         "[dependencies]\n"
-        "leaf = { path = \"" + leaf.string() + "\" }\n";
+        "leaf = { path = '" + leaf.string() + "' }\n";
     auto mid_a = make_pkg("mid_a", "1.0.0", leaf_dep);
     auto mid_b = make_pkg("mid_b", "1.0.0", leaf_dep);
 
