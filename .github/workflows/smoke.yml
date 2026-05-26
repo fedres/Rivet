@@ -1,0 +1,98 @@
+name: Smoke (nightly)
+
+# Exercises the full end-to-end pipeline (rivet new → add fmt → fetch → build
+# → run) against a real binary on each supported runner. This catches issues
+# the unit tests can't — vcpkg integration, toolchain bootstrap, real linking.
+#
+# Slow (~10-30 min per runner because vcpkg builds fmt from source with the
+# bundled clang), so we don't gate every PR on it — runs nightly + on demand.
+
+on:
+  schedule:
+    - cron: "17 5 * * *"   # 05:17 UTC daily
+  workflow_dispatch:
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: smoke / ${{ matrix.os }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    continue-on-error: ${{ matrix.allow_failure }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            runner: ubuntu-22.04
+            allow_failure: false
+          - os: ubuntu-24.04
+            runner: ubuntu-24.04
+            allow_failure: false
+          - os: macos-14
+            runner: macos-14
+            allow_failure: false
+          # Windows currently lacks Windows SDK auto-discovery — the smoke
+          # path will fail at `rivet fetch` until that lands. Run it anyway
+          # so we have a visible signal of when the gap closes.
+          - os: windows-2022
+            runner: windows-2022
+            allow_failure: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ── Build rivet (release) ──────────────────────────────────────────
+      - name: Install build deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build gcc-13 g++-13 clang-14 \
+            libseccomp-dev libssl-dev
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100 \
+            --slave /usr/bin/g++ g++ /usr/bin/g++-13
+
+      - name: Install build deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja
+
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure rivet
+        run: cmake --preset release
+
+      - name: Build rivet
+        run: cmake --build --preset release --parallel
+
+      # ── Run smoke test ─────────────────────────────────────────────────
+      - name: Smoke test (Unix)
+        if: runner.os != 'Windows'
+        run: python tests/smoke/hello_fmt.py build/release/rivet
+
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        run: python tests/smoke/hello_fmt.py build/release/rivet.exe
+
+      # ── Upload logs on failure ─────────────────────────────────────────
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-${{ matrix.os }}-logs
+          path: |
+            build/release/Testing/
+            /tmp/rivet-smoke-*
+          if-no-files-found: ignore
