@@ -63,7 +63,7 @@ TEST_F(ResolverTest, FollowsTransitiveDeps) {
     auto leaf = make_pkg("leaf", "1.0.0");
     auto mid_toml =
         "[dependencies]\n"
-        "leaf = { path = \"" + leaf.string() + "\" }\n";
+        "leaf = { path = '" + leaf.string() + "' }\n";
     auto mid = make_pkg("mid", "2.0.0", mid_toml);
 
     Manifest root;

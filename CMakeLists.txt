@@ -173,6 +173,7 @@ add_library(rivet_runtime STATIC
     # Cache layer
     runtime/cache/key.cpp
     runtime/cache/store.cpp
+    runtime/cache/binary_cache.cpp
 
     # Package management
     runtime/package/manifest.cpp
