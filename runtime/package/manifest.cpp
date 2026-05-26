@@ -21,24 +21,12 @@
 
 namespace rivet::pkg {
 
+#if !RIVET_HAVE_TOMLPP
 // ─── Minimal TOML stub parser ─────────────────────────────────────────────────
-// Handles only what is strictly required for rivet.toml — a proper toml++
-// implementation replaces this entirely once the vendor is populated.
+// Handles only what is strictly required for rivet.toml — used only when the
+// vendored toml++ is absent (RIVET_VENDOR_FETCH=OFF build path).
 namespace detail {
 
-struct TomlValue {
-    enum class Kind { String, Integer, Bool, Array, Table };
-
-    Kind kind = Kind::String;
-    std::string                             string_val;
-    int64_t                                 int_val = 0;
-    bool                                    bool_val = false;
-    std::vector<TomlValue>                  array_val;
-    std::unordered_map<std::string, TomlValue> table_val;
-};
-
-// Very small TOML key = string-value / array parser (sufficient for our schema).
-// Returns a flat key→value map (dotted keys flattened by section prefix).
 using FlatMap = std::unordered_map<std::string, std::string>;
 
 static FlatMap parse_flat(std::string_view text) {
@@ -100,6 +88,7 @@ static std::string get(const FlatMap& m, const std::string& key,
 }
 
 } // namespace detail
+#endif // !RIVET_HAVE_TOMLPP
 
 // ─── parse_manifest() ─────────────────────────────────────────────────────────
 

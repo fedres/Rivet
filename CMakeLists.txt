@@ -177,6 +177,7 @@ add_library(rivet_runtime STATIC
     # Package management
     runtime/package/manifest.cpp
     runtime/package/lockfile.cpp
+    runtime/package/source.cpp
 
     # Toolchain
     runtime/toolchain/discovery.cpp
