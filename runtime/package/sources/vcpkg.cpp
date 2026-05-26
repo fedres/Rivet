@@ -15,13 +15,18 @@ constexpr const char* kVcpkgRepo = "https://github.com/microsoft/vcpkg.git";
 
 // Map our triple namespace to vcpkg's built-in triplet base.
 // We then layer a "-rivet" overlay triplet that pins the compiler.
+//
+// On Windows we deliberately use the *-static base so the install_root
+// produces standalone static libs (no msvcp140.dll etc. dropped in bin/).
+// That's the deterministic-build story; users can opt into shared via
+// future per-dep features.
 std::string_view vcpkg_triplet_base(std::string_view rivet_triple) {
     if (rivet_triple.starts_with("x86_64-linux")) return "x64-linux";
     if (rivet_triple.starts_with("arm64-linux"))  return "arm64-linux";
     if (rivet_triple.starts_with("aarch64-linux"))return "arm64-linux";
     if (rivet_triple.starts_with("arm64-apple"))  return "arm64-osx";
     if (rivet_triple.starts_with("x86_64-apple")) return "x64-osx";
-    if (rivet_triple.starts_with("x86_64-windows")) return "x64-windows";
+    if (rivet_triple.starts_with("x86_64-windows")) return "x64-windows-static";
     return "x64-linux";
 }
 
@@ -51,6 +56,8 @@ Result<void> write_text(const Path& dst, std::string_view text) {
 }
 
 // Bootstrap the vcpkg CLI binary from the local clone. Idempotent.
+// On Windows, the .bat script must be run through cmd.exe — CreateProcessW
+// does not auto-shell-out for batch files (unlike ShellExecute).
 Result<Path> ensure_vcpkg_cli(const Path& vcpkg_root) {
 #if defined(_WIN32)
     Path cli = vcpkg_root / "vcpkg.exe";
@@ -68,7 +75,8 @@ Result<Path> ensure_vcpkg_cli(const Path& vcpkg_root) {
 
     rivet::process::SpawnOptions opts;
 #if defined(_WIN32)
-    opts.args = { bootstrap.string(), "-disableMetrics" };
+    // cmd /c "<path>" -disableMetrics
+    opts.args = { "cmd.exe", "/c", bootstrap.string(), "-disableMetrics" };
 #else
     opts.args = { bootstrap.string(), "-disableMetrics" };
 #endif
@@ -93,6 +101,12 @@ Result<Path> ensure_vcpkg_cli(const Path& vcpkg_root) {
 
 // Generate the overlay triplet that forces vcpkg's CMake-driven port builds
 // to use our bundled clang. Returns the overlay-triplet directory path.
+//
+// Platform-specific compiler selection:
+//   POSIX: clang / clang++ / lld / llvm-ar             (GNU ABI)
+//   Win:   clang-cl / clang-cl / lld-link / llvm-lib   (MSVC ABI — required
+//                                                       to match vcpkg's
+//                                                       x64-windows triplet)
 Result<Path> write_overlay_triplet(const Path& vcpkg_root,
                                     std::string_view triplet_name,
                                     std::string_view rivet_triple,
@@ -101,6 +115,23 @@ Result<Path> write_overlay_triplet(const Path& vcpkg_root,
     if (auto r = rivet::fs::create_dirs(overlay_dir); !r)
         return make_error<Path>(r.error().message);
 
+#if defined(_WIN32)
+    // clang-cl is LLVM's MSVC-compatible driver — must match vcpkg's CRT/ABI.
+    std::string cc_path  = (tc.root / "bin" / "clang-cl.exe").generic_string();
+    std::string cxx_path = cc_path;
+    std::string ar_path  = (tc.root / "bin" / "llvm-lib.exe").generic_string();
+    std::string ld_path  = (tc.root / "bin" / "lld-link.exe").generic_string();
+    std::string ranlib_path = ar_path;  // llvm-lib subsumes ranlib on Windows
+#else
+    // generic_string() converts to forward slashes — safe in CMake double-quoted
+    // strings on every platform.
+    std::string cc_path  = tc.clang().generic_string();
+    std::string cxx_path = tc.clangpp().generic_string();
+    std::string ar_path  = tc.llvm_ar().generic_string();
+    std::string ld_path  = tc.lld().generic_string();
+    std::string ranlib_path = ar_path;  // llvm-ranlib is a hardlink to llvm-ar
+#endif
+
     // Chainload toolchain file: pins CC/CXX/AR to the bundled binaries.
     Path chainload = overlay_dir / std::format("{}-toolchain.cmake", triplet_name);
     std::string chainload_text = std::format(
@@ -108,13 +139,9 @@ Result<Path> write_overlay_triplet(const Path& vcpkg_root,
         "set(CMAKE_C_COMPILER   \"{}\" CACHE FILEPATH \"\")\n"
         "set(CMAKE_CXX_COMPILER \"{}\" CACHE FILEPATH \"\")\n"
         "set(CMAKE_AR           \"{}\" CACHE FILEPATH \"\")\n"
-        "set(CMAKE_RANLIB       \"{}-ranlib\" CACHE FILEPATH \"\")\n"
+        "set(CMAKE_RANLIB       \"{}\" CACHE FILEPATH \"\")\n"
         "set(CMAKE_LINKER       \"{}\" CACHE FILEPATH \"\")\n",
-        tc.clang().string(),
-        tc.clangpp().string(),
-        tc.llvm_ar().string(),
-        tc.llvm_ar().string(),     // llvm-ranlib is a hardlink to llvm-ar
-        tc.lld().string());
+        cc_path, cxx_path, ar_path, ranlib_path, ld_path);
     if (auto r = write_text(chainload, chainload_text); !r)
         return make_error<Path>(r.error().message);
 
