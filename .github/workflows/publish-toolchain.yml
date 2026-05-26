@@ -4,16 +4,12 @@
 # into our own GitHub release tagged `toolchain-<ver>`, in the .tar.zst
 # format that `rivet toolchain install` expects.
 #
-# Trigger from the Actions tab:
-#   Actions → "Publish LLVM Toolchain Bundle" → Run workflow
-#   → enter LLVM version (e.g. 18.1.8)
-#
-# After it succeeds, users on any platform can run:
-#   rivet toolchain install 18.1.8
-#
-# The workflow does all extraction/repacking on Ubuntu (xz + zstd + tar are
-# uniform there). Platform binaries are inside the upstream tarballs — we
-# just rewrap them, we don't recompile anything.
+# Asset names on github.com/llvm/llvm-project change across releases
+# (sometimes "LLVM-X-Linux-X64.tar.xz", sometimes
+# "clang+llvm-X-x86_64-linux-gnu-ubuntu-18.04.tar.xz"), so this workflow
+# queries the upstream release manifest and picks the first asset whose
+# name matches a per-target regex. That makes it robust to LLVM's naming
+# churn without us having to keep tracking it.
 
 name: Publish LLVM Toolchain Bundle
 
@@ -21,11 +17,11 @@ on:
   workflow_dispatch:
     inputs:
       llvm_version:
-        description: 'LLVM version (e.g. 18.1.8, 19.1.5)'
+        description: 'LLVM version (e.g. 18.1.8, 19.1.7)'
         required: true
-        default: '18.1.8'
+        default: '19.1.7'
       strip_unused:
-        description: 'Strip docs/static-libs to shrink the bundle (~50% smaller)'
+        description: 'Strip docs/static-libs to shrink the bundle'
         required: false
         default: 'true'
 
@@ -40,33 +36,53 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Each regex matches the assets that exist on the LLVM release page.
+          # Order doesn't matter — first match wins.
           - target:   x86_64-linux-gnu
-            upstream: Linux-X64
+            pattern:  '^(LLVM-VERSION-Linux-X64|clang\+llvm-VERSION-x86_64-linux-gnu(-ubuntu-[0-9.]+)?)\.tar\.xz$'
           - target:   arm64-linux-gnu
-            upstream: Linux-ARM64
+            pattern:  '^(LLVM-VERSION-Linux-ARM64|clang\+llvm-VERSION-(arm64|aarch64)-linux-gnu)\.tar\.xz$'
           - target:   arm64-apple-macos
-            upstream: macOS-ARM64
+            pattern:  '^(LLVM-VERSION-macOS-ARM64|clang\+llvm-VERSION-arm64-apple-macos[0-9]*)\.tar\.xz$'
           - target:   x86_64-windows-msvc
-            upstream: Windows-X64
+            pattern:  '^(LLVM-VERSION-Windows-X64|clang\+llvm-VERSION-x86_64-pc-windows-msvc)\.tar\.xz$'
 
     steps:
       - name: Install tools
-        run: sudo apt-get update -q && sudo apt-get install -y --no-install-recommends zstd xz-utils
+        run: sudo apt-get update -q && sudo apt-get install -y --no-install-recommends zstd xz-utils jq
 
-      - name: Download upstream LLVM
+      - name: Resolve and download upstream asset
         id: dl
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          UPSTREAM_FILE="LLVM-${{ inputs.llvm_version }}-${{ matrix.upstream }}.tar.xz"
-          URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-${{ inputs.llvm_version }}/${UPSTREAM_FILE}"
-          echo "Trying: $URL"
-          if curl -fsSL -o llvm.tar.xz "$URL"; then
-            echo "have_bundle=true" >> "$GITHUB_OUTPUT"
-            ls -lh llvm.tar.xz
-          else
-            echo "No upstream bundle at $URL — skipping this target."
+          VER="${{ inputs.llvm_version }}"
+          PATTERN="$(echo '${{ matrix.pattern }}' | sed "s/VERSION/$VER/g")"
+          echo "Pattern for ${{ matrix.target }}: $PATTERN"
+
+          # Pull asset names from the upstream release.
+          ASSETS_JSON="$(gh api "repos/llvm/llvm-project/releases/tags/llvmorg-$VER" --jq '.assets[].name' || echo "")"
+          if [ -z "$ASSETS_JSON" ]; then
+            echo "::error::Cannot fetch upstream LLVM release llvmorg-$VER"
             echo "have_bundle=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          MATCH="$(echo "$ASSETS_JSON" | grep -E "$PATTERN" | head -n1 || true)"
+          if [ -z "$MATCH" ]; then
+            echo "::warning::No upstream asset matches '$PATTERN' for LLVM $VER — skipping."
+            echo "Available assets:"
+            echo "$ASSETS_JSON" | sed 's/^/    /'
+            echo "have_bundle=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-$VER/$MATCH"
+          echo "Downloading: $URL"
+          curl -fSL --progress-bar -o llvm.tar.xz "$URL"
+          ls -lh llvm.tar.xz
+          echo "have_bundle=true" >> "$GITHUB_OUTPUT"
 
       - name: Extract
         if: steps.dl.outputs.have_bundle == 'true'
@@ -74,43 +90,31 @@ jobs:
           set -eu
           mkdir -p extract
           tar -xJf llvm.tar.xz -C extract --strip-components=1
-          echo "Extracted size:"
           du -sh extract
 
       - name: Strip unused (optional)
         if: steps.dl.outputs.have_bundle == 'true' && inputs.strip_unused == 'true'
         run: |
           set -eu
-          # Keep what Rivet's build engine needs:
-          #   bin/{clang,clang++,clang-cl,lld,lld-link,llvm-ar,llvm-strip,clang-scan-deps,llvm-objcopy,llvm-readelf}
-          #   include/c++/v1/        — libc++ headers
-          #   lib/clang/<v>/         — clang builtin headers + compiler-rt
-          #   lib/libc++*, lib/libc++abi*, lib/libunwind* — runtime shared libs
-          mkdir -p keep/bin keep/lib
-
-          # Keep selected binaries.
-          for tool in clang clang++ clang-cl lld lld-link llvm-ar llvm-strip \
-                       clang-scan-deps llvm-objcopy llvm-readelf llvm-ranlib \
-                       llvm-nm llvm-objdump ld.lld ld64.lld; do
-            if [ -e "extract/bin/$tool" ]; then
-              cp -a "extract/bin/$tool" "keep/bin/"
-            fi
+          mkdir -p keep/bin
+          # Keep the binaries Rivet's build engine actually uses.
+          for tool in clang clang++ clang-cl lld lld-link ld.lld ld64.lld \
+                       llvm-ar llvm-strip llvm-ranlib llvm-nm \
+                       llvm-objcopy llvm-readelf llvm-objdump \
+                       clang-scan-deps llvm-symbolizer llvm-cov; do
+            [ -e "extract/bin/$tool" ] && cp -a "extract/bin/$tool" "keep/bin/" || true
           done
-
-          # Keep libcxx + compiler-rt + clang resource dir.
-          [ -d extract/include/c++ ]      && cp -a extract/include/c++ keep/include 2>/dev/null || mkdir -p keep/include && cp -a extract/include/c++ keep/include/
-          # Keep all libclang_rt + clang resource directories (multiple LLVM
-          # versions may live side-by-side after a major bump).
-          if [ -d extract/lib/clang ]; then
-            cp -a extract/lib/clang keep/lib/
-          fi
+          # Headers: libc++ + clang builtins.
+          [ -d extract/include/c++ ] && { mkdir -p keep/include; cp -a extract/include/c++ keep/include/; } || true
+          # Clang resource dir (multiple major versions may coexist).
+          mkdir -p keep/lib
+          [ -d extract/lib/clang ] && cp -a extract/lib/clang keep/lib/ || true
           # Runtime shared libs the linker may need.
           for pat in libc++ libc++abi libunwind libomp libclang-cpp; do
             for f in extract/lib/${pat}*; do
               [ -e "$f" ] && cp -a "$f" keep/lib/ || true
             done
           done
-
           du -sh keep
           rm -rf extract
           mv keep extract
@@ -120,7 +124,7 @@ jobs:
         run: |
           set -eu
           # The CLI extracts with --strip-components=1, so wrap the LLVM tree
-          # in a top-level directory it can strip cleanly.
+          # in a top-level directory that strip can consume.
           STAGE="rivet-toolchain-clang-${{ inputs.llvm_version }}-${{ matrix.target }}"
           mv extract "$STAGE"
           OUT="${STAGE}.tar.zst"
@@ -142,6 +146,7 @@ jobs:
     name: Publish toolchain release
     needs: bundle
     runs-on: ubuntu-22.04
+    if: always() && needs.bundle.result == 'success'
     steps:
       - name: Download all bundles
         uses: actions/download-artifact@v4
@@ -150,8 +155,17 @@ jobs:
           path: dist/
           merge-multiple: true
 
-      - name: Show what we have
-        run: ls -lh dist/
+      - name: Verify at least one bundle was built
+        run: |
+          set -eu
+          mkdir -p dist
+          if [ -z "$(ls -A dist 2>/dev/null)" ]; then
+            echo "::error::No bundles were produced — every target was skipped."
+            echo "Check the bundle job logs for the LLVM asset naming mismatch."
+            exit 1
+          fi
+          echo "Bundles to publish:"
+          ls -lh dist/
 
       - name: Create/update toolchain release
         uses: softprops/action-gh-release@v2
@@ -182,8 +196,5 @@ jobs:
             | macOS arm64             | `rivet-toolchain-clang-${{ inputs.llvm_version }}-arm64-apple-macos.tar.zst` |
             | Windows x86_64          | `rivet-toolchain-clang-${{ inputs.llvm_version }}-x86_64-windows-msvc.tar.zst` |
 
-            All bundles are SHA-256 checksummed. `rivet toolchain install`
-            verifies the checksum automatically.
-
-            *(Missing bundles indicate no upstream prebuilt exists for that
-            target/version — re-dispatch the workflow with a different version.)*
+            *(Missing rows mean upstream didn't ship that target for this version —
+            check the workflow logs.)*
