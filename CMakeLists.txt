@@ -129,7 +129,7 @@ target_compile_features(rivet_pal PUBLIC cxx_std_23)
 
 if(RIVET_PLATFORM_WINDOWS)
     target_compile_definitions(rivet_pal PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
-    target_link_libraries(rivet_pal PUBLIC ws2_32 crypt32 shlwapi)
+    target_link_libraries(rivet_pal PUBLIC ws2_32 crypt32 shlwapi bcrypt)
 endif()
 
 if(RIVET_PLATFORM_MACOS)

@@ -104,7 +104,7 @@ Result<void> create_dir(const Path& p) {
 Result<void> create_dirs(const Path& p) {
     auto parent = p.parent_path();
     if (!parent.empty() && parent != p) {
-        auto r = exists(parent);
+        auto r = rivet::fs::exists(parent);
         if (r && !*r) RIVET_TRY(create_dirs(parent));
     }
     return create_dir(p);
@@ -226,11 +226,11 @@ Result<std::vector<std::byte>> read_file(const Path& p) {
 Result<void> write_atomic(const Path& dest, ByteSpan data) {
     auto tmp = temp_path_near(dest);
     auto fh  = open(tmp, OpenMode::Write | OpenMode::Create | OpenMode::Truncate);
-    if (!fh) return propagate(fh);
+    if (!fh) return propagate<void>(fh);
     size_t w = 0;
     while (w < data.size()) {
         auto n = fh->write(ByteSpan{data.data() + w, data.size() - w});
-        if (!n) return propagate(n);
+        if (!n) return propagate<void>(n);
         w += *n;
     }
     RIVET_TRY(fh->fsync());
