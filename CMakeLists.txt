@@ -180,6 +180,8 @@ add_library(rivet_runtime STATIC
     runtime/package/source.cpp
     runtime/package/sources/local.cpp
     runtime/package/sources/git.cpp
+    runtime/package/sources/vcpkg.cpp
+    runtime/common/json.cpp
 
     # Toolchain
     runtime/toolchain/discovery.cpp
