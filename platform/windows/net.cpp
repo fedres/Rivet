@@ -27,6 +27,10 @@ Result<void> HttpClient::download(std::string_view p, const Path& d, std::option
 Result<Response> http_get(const Url& url, RequestOptions opts) { HttpClient c{url.to_string(), std::move(opts)}; return c.get("/"); }
 Result<void> download_file(const Url& url, const Path& dest, std::optional<std::string> sha, ProgressCallback pb, RequestOptions opts) { HttpClient c{url.to_string(), std::move(opts)}; return c.download("/", dest, std::move(sha), std::move(pb)); }
 
+std::string Response::body_str() const {
+    return std::string(reinterpret_cast<const char*>(body.data()), body.size());
+}
+
 Result<void> init_tls_trust_store() {
     // TODO: enumerate CertOpenSystemStore("ROOT") and import into mbedTLS context.
     return {};

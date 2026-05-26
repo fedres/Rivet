@@ -21,7 +21,7 @@ protected:
     }
 
     void TearDown() override {
-        fs::remove_all(test_dir);
+        (void)fs::remove_all(test_dir);
     }
 
     Path p(const std::string& rel) const { return test_dir / rel; }

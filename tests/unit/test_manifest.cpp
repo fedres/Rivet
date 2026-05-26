@@ -18,16 +18,16 @@ protected:
         auto t = rivet::env::temp_dir();
         ASSERT_TRUE(t.has_value());
         tmp_dir = *t / "rivet_manifest_test";
-        rivet::fs::create_dirs(tmp_dir);
+        (void)rivet::fs::create_dirs(tmp_dir);
     }
 
     void TearDown() override {
-        rivet::fs::remove_all(tmp_dir);
+        (void)rivet::fs::remove_all(tmp_dir);
     }
 
     rivet::Path write_toml(const std::string& content) {
         auto path = tmp_dir / "rivet.toml";
-        rivet::fs::write_atomic(path,
+        (void)rivet::fs::write_atomic(path,
             rivet::ByteSpan{reinterpret_cast<const std::byte*>(content.data()), content.size()});
         return path;
     }

@@ -18,6 +18,12 @@ CancellationToken::CancellationToken() : impl_(std::make_shared<Impl>()) {}
 void CancellationToken::cancel() { impl_->cancelled.store(true, std::memory_order_release); }
 bool CancellationToken::is_cancelled() const { return impl_->cancelled.load(std::memory_order_acquire); }
 
+ChildProcess::ChildProcess(ChildProcess&& o) noexcept
+    : pid_(o.pid_), handle_(o.handle_) {
+    o.pid_    = 0;
+    o.handle_ = nullptr;
+}
+
 ChildProcess::~ChildProcess() {
     if (handle_) ::CloseHandle(handle_);
 }
