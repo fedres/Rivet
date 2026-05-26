@@ -98,24 +98,40 @@ jobs:
           set -eu
           mkdir -p keep/bin
           # Keep the binaries Rivet's build engine actually uses.
+          # Glob for "$tool*" so both "clang" (POSIX) and "clang.exe" (Windows)
+          # are picked up. Excludes the static analyzer / sanitizer libs which
+          # we don't need at install time.
           for tool in clang clang++ clang-cl lld lld-link ld.lld ld64.lld \
-                       llvm-ar llvm-strip llvm-ranlib llvm-nm \
-                       llvm-objcopy llvm-readelf llvm-objdump \
-                       clang-scan-deps llvm-symbolizer llvm-cov; do
-            [ -e "extract/bin/$tool" ] && cp -a "extract/bin/$tool" "keep/bin/" || true
+                       llvm-ar llvm-lib llvm-dlltool \
+                       llvm-strip llvm-ranlib llvm-nm \
+                       llvm-objcopy llvm-readelf llvm-readobj llvm-objdump \
+                       clang-scan-deps llvm-symbolizer llvm-cov llvm-cxxfilt; do
+            for f in "extract/bin/$tool" "extract/bin/$tool.exe"; do
+              [ -e "$f" ] && cp -a "$f" "keep/bin/" || true
+            done
+          done
+          # Windows distributes its DLL runtime in bin/ — grab everything there.
+          for dll in extract/bin/*.dll; do
+            [ -e "$dll" ] && cp -a "$dll" keep/bin/ || true
           done
           # Headers: libc++ + clang builtins.
           [ -d extract/include/c++ ] && { mkdir -p keep/include; cp -a extract/include/c++ keep/include/; } || true
           # Clang resource dir (multiple major versions may coexist).
           mkdir -p keep/lib
           [ -d extract/lib/clang ] && cp -a extract/lib/clang keep/lib/ || true
-          # Runtime shared libs the linker may need.
-          for pat in libc++ libc++abi libunwind libomp libclang-cpp; do
+          # Runtime shared libs / import libs the linker may need.
+          for pat in libc++ libc++abi libunwind libomp libclang libLTO; do
             for f in extract/lib/${pat}*; do
               [ -e "$f" ] && cp -a "$f" keep/lib/ || true
             done
           done
+          # Sanity check — bail if we ended up with nothing executable.
+          if [ -z "$(ls -A keep/bin 2>/dev/null)" ]; then
+            echo "::error::Strip step removed all binaries — fix the tool list above."
+            exit 1
+          fi
           du -sh keep
+          ls keep/bin
           rm -rf extract
           mv keep extract
 
