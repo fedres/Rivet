@@ -178,6 +178,7 @@ add_library(rivet_runtime STATIC
     runtime/package/manifest.cpp
     runtime/package/lockfile.cpp
     runtime/package/source.cpp
+    runtime/package/resolver.cpp
     runtime/package/sources/local.cpp
     runtime/package/sources/git.cpp
     runtime/package/sources/vcpkg.cpp
