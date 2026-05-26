@@ -61,11 +61,12 @@ configure_file(
 
 # ─── Optional vendored dependencies ──────────────────────────────────────────
 #
-# store.cpp uses SQLite via vendor/sqlite/sqlite3.h (guarded by __has_include).
-# manifest.cpp uses toml++ via vendor/tomlplusplus/toml.hpp (same guard).
-# Pass -DRIVET_VENDOR_FETCH=ON to cmake to auto-download both on first configure.
+# toml.hpp is checked in directly under vendor/tomlplusplus/ (~475 KB, MIT).
+# The SQLite amalgamation (~8.6 MB) is fetched at configure time when ON (default)
+# to keep the repo small. Pass -DRIVET_VENDOR_FETCH=OFF for fully offline builds —
+# cache will run in stub mode (no-op) but builds still work.
 
-option(RIVET_VENDOR_FETCH "Download vendored SQLite3 + toml++ if absent" OFF)
+option(RIVET_VENDOR_FETCH "Download vendored SQLite3 if absent (network required on first configure)" ON)
 
 if(RIVET_VENDOR_FETCH)
     include(FetchContent)
