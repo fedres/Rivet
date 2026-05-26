@@ -25,6 +25,9 @@ struct VcpkgConfig {
     // Pinned commit SHA (the "baseline"). Used for deterministic resolution.
     // Empty = use whatever HEAD the local clone is at.
     std::string baseline;
+    // Path to <rivet_home>. fetch() looks up the active bundled toolchain
+    // under this root to pin vcpkg's compiler via a custom triplet.
+    Path rivet_home;
 };
 
 class VcpkgSource final : public PackageSource {

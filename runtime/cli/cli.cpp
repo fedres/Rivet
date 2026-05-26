@@ -53,6 +53,7 @@ static void print_usage() {
         "  run         Build and run the project binary\n"
         "  add         Add a dependency\n"
         "  remove      Remove a dependency\n"
+        "  fetch       Fetch + build all locked dependencies via their sources\n"
         "  new         Create a new project from a template\n"
         "  publish     Publish a package to the registry\n"
         "  cache       Manage the local build cache\n"
@@ -78,6 +79,7 @@ int run(const Context& ctx) {
     if (sub == "run")      return cmd_run(ctx);
     if (sub == "add")      return cmd_add(ctx);
     if (sub == "remove")   return cmd_remove(ctx);
+    if (sub == "fetch")    return cmd_fetch(ctx);
     if (sub == "new")      return cmd_new(ctx);
     if (sub == "publish")  return cmd_publish(ctx);
     if (sub == "cache")       return cmd_cache(ctx);
@@ -712,6 +714,93 @@ int cmd_add(const Context& ctx) {
     }
 
     std::cout << std::format("  {} \"{}\" written to rivet.toml\n", pkg_name, pkg_version);
+    return 0;
+}
+
+// ─── cmd_fetch ──────────────────────────────────────────────────────────────
+//
+// Materialize every locked dependency on disk via its source backend.
+// For vcpkg deps this triggers `vcpkg install` with the bundled-clang triplet;
+// for git/local deps it's just a clone/copy. Idempotent.
+
+int cmd_fetch(const Context& /*ctx*/) {
+    auto cwd_opt = rivet::env::get("PWD");
+    Path cwd = cwd_opt ? Path{*cwd_opt} : Path{"."};
+    auto manifest_r = rivet::pkg::find_and_parse(cwd);
+    if (!manifest_r) {
+        std::cerr << "error: " << manifest_r.error().message << "\n";
+        return 1;
+    }
+    const auto& manifest = *manifest_r;
+
+    if (manifest.dependencies.empty()) {
+        std::cout << "no dependencies declared in rivet.toml — nothing to fetch.\n";
+        return 0;
+    }
+
+    auto home_r = rivet::env::rivet_home();
+    Path rivet_home_path = home_r ? *home_r : Path{".rivet"};
+    auto registry = rivet::pkg::make_default_registry(rivet_home_path);
+    rivet::pkg::Resolver resolver{registry};
+
+    auto lock = resolver.resolve(manifest);
+    if (!lock) {
+        std::cerr << "error: " << lock.error().message << "\n";
+        return 1;
+    }
+
+    // Cache for fetched artifacts: <rivet_home>/cache/deps/<root_pkg>/
+    Path fetch_cache = rivet_home_path / "cache" / "deps" / manifest.name;
+    if (auto r = rivet::fs::create_dirs(fetch_cache); !r) {
+        std::cerr << "error: cannot create cache dir " << fetch_cache.string()
+                  << ": " << r.error().message << "\n";
+        return 1;
+    }
+
+    int failures = 0;
+    for (const auto& dep : lock->packages) {
+        std::cout << std::format("Fetching {} {} ({})\n",
+            dep.name, dep.version, dep.source);
+        auto* src = registry.find(dep.source);
+        if (!src) {
+            std::cerr << "  error: source '" << dep.source << "' not configured\n";
+            ++failures;
+            continue;
+        }
+        // Reconstruct a minimal ResolvedPackage for fetch().
+        rivet::pkg::ResolvedPackage rp;
+        rp.name           = dep.name;
+        rp.version        = dep.version;
+        rp.source_id      = dep.source;
+        rp.archive_sha256 = dep.checksum.empty()
+            ? std::optional<std::string>{} : dep.checksum;
+        if (dep.source == "git") {
+            rp.source_locator = dep.git_url + "#" + dep.git_commit;
+        } else if (dep.source == "path") {
+            rp.source_locator = dep.local_path.string();
+        } else {
+            rp.source_locator = "vcpkg://" + dep.name;
+        }
+
+        auto recipe = src->fetch(rp, fetch_cache);
+        if (!recipe) {
+            std::cerr << "  error: " << recipe.error().message << "\n";
+            ++failures;
+            continue;
+        }
+        if (recipe->driver == rivet::pkg::BuildDriver::Prebuilt
+                && !recipe->install_root.empty()) {
+            std::cout << "  installed → " << recipe->install_root.string() << "\n";
+        } else if (!recipe->source_dir.empty()) {
+            std::cout << "  source    → " << recipe->source_dir.string() << "\n";
+        }
+    }
+
+    if (failures > 0) {
+        std::cerr << std::format("\n{} dependency fetch(es) failed.\n", failures);
+        return 1;
+    }
+    std::cout << std::format("\nFetched {} dependency(ies).\n", lock->packages.size());
     return 0;
 }
 

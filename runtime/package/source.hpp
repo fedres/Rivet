@@ -57,16 +57,20 @@ struct ResolvedPackage {
 
 // Build system used by an upstream port. Tells the build engine which
 // driver to invoke (and with what flags) to produce build outputs.
-enum class BuildDriver { Rivet, CMake, Meson, Autotools, Custom };
+//
+//   Prebuilt — the package is already installed on disk (vcpkg-driven build,
+//              or a hit from the content-addressed binary cache). The build
+//              engine consumes `install_root` directly and skips compilation.
+enum class BuildDriver { Rivet, CMake, Meson, Autotools, Custom, Prebuilt };
 
-// Concrete recipe for building a fetched package. Once we have this, the
-// build engine spawns the bundled clang with the appropriate flags.
+// Concrete recipe for building (or just consuming) a fetched package.
 struct PortRecipe {
     Path        source_dir;               // extracted/checked-out source
+    Path        install_root;             // populated for Prebuilt: <root>/{include,lib}
     BuildDriver driver = BuildDriver::CMake;
     std::vector<std::string> cmake_args;  // additional -D flags
     std::vector<Path>        patches;     // applied in order
-    std::vector<std::string> targets;     // null = build all
+    std::vector<std::string> targets;     // empty = build all
     // For Custom: shell commands to run. Composable with the bundled
     // toolchain via $CC / $CXX / $AR environment overrides.
     std::vector<std::string> custom_steps;

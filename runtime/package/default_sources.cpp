@@ -14,6 +14,7 @@ SourceRegistry make_default_registry(const Path& rivet_home) {
 
     VcpkgConfig vcpkg_cfg;
     vcpkg_cfg.vcpkg_root = rivet_home / "sources" / "vcpkg";
+    vcpkg_cfg.rivet_home = rivet_home;
     // Allow override of the pinned baseline via env var so users can pin to a
     // specific catalog commit without rebuilding rivet.
     if (auto bl = rivet::env::get("RIVET_VCPKG_BASELINE"))
