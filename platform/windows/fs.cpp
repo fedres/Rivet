@@ -144,7 +144,7 @@ Result<void> remove_all(const Path& p) {
         auto entries = list_dir(p);
         if (!entries) return propagate<void>(entries);
         for (const auto& entry : *entries) {
-            auto r = remove_all(entry);
+            auto r = rivet::fs::remove_all(entry);
             if (!r) return r;
         }
         return remove_dir(p);
