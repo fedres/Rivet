@@ -33,8 +33,14 @@ namespace rivet::pkg {
 struct PackageRef {
     std::string name;
     std::string version_constraint;       // "^1", "=2.3.4", "*", git rev, etc.
-    std::optional<std::string> source_id; // explicit source override ("vcpkg", "git", ...)
-    std::vector<std::string>   features;
+    std::optional<std::string> source_id; // explicit source override ("vcpkg", "git", "path", ...)
+
+    // Source-specific locators — populated based on the dep spec in rivet.toml.
+    std::string git_url;                  // for "git"
+    std::string git_ref;                  // for "git" (branch, tag, or SHA)
+    Path        local_path;               // for "path"
+
+    std::vector<std::string> features;
 };
 
 // A package after resolution: exact version + source coordinates so future

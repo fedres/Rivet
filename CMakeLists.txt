@@ -178,6 +178,8 @@ add_library(rivet_runtime STATIC
     runtime/package/manifest.cpp
     runtime/package/lockfile.cpp
     runtime/package/source.cpp
+    runtime/package/sources/local.cpp
+    runtime/package/sources/git.cpp
 
     # Toolchain
     runtime/toolchain/discovery.cpp
