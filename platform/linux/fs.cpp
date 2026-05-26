@@ -7,7 +7,9 @@
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
+#include <ftw.h>
 #include <sys/file.h>
+#include <sys/sendfile.h>
 #include <sys/stat.h>
 #include <sys/inotify.h>
 #include <unistd.h>
@@ -110,16 +112,48 @@ Result<void> remove_dir(const Path& p) {
 }
 
 Result<void> remove_all(const Path& p) {
-    // TODO: implement recursive removal using nftw or manual traversal
-    (void)p;
-    return make_error("remove_all: not yet implemented");
+    std::string root = p.string();
+    int rc = ::nftw(root.c_str(),
+        [](const char* fpath, const struct stat* /*sb*/, int typeflag, struct FTW* /*ftwbuf*/) -> int {
+            if (typeflag == FTW_DP || typeflag == FTW_D)
+                return ::rmdir(fpath);
+            return ::unlink(fpath);
+        },
+        64 /*nopenfd*/, FTW_DEPTH | FTW_PHYS);
+    if (rc != 0)
+        return make_error(std::string("remove_all: ") + std::strerror(errno), errno);
+    return {};
 }
 
 Result<void> copy_file(const Path& from, const Path& to) {
-    // Use sendfile(2) or fallback read/write loop.
-    // TODO: implement
-    (void)from; (void)to;
-    return make_error("copy_file: not yet implemented");
+    int src = ::open(from.c_str(), O_RDONLY | O_CLOEXEC);
+    if (src < 0)
+        return make_error(std::string("copy_file open src: ") + std::strerror(errno), errno);
+
+    struct stat st{};
+    ::fstat(src, &st);
+
+    int dst = ::open(to.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC,
+                     st.st_mode & 0777);
+    if (dst < 0) {
+        ::close(src);
+        return make_error(std::string("copy_file open dst: ") + std::strerror(errno), errno);
+    }
+
+    off_t remaining = st.st_size;
+    off_t offset = 0;
+    while (remaining > 0) {
+        ssize_t n = ::sendfile(dst, src, &offset, static_cast<size_t>(remaining));
+        if (n < 0) {
+            int saved = errno;
+            ::close(src); ::close(dst);
+            return make_error(std::string("sendfile: ") + std::strerror(saved), saved);
+        }
+        remaining -= n;
+    }
+    ::close(src);
+    ::close(dst);
+    return {};
 }
 
 Result<void> rename_atomic(const Path& from, const Path& to) {
@@ -244,6 +278,21 @@ Result<void> unlock_file(const FileHandle& fh) {
     if (::flock(fh.native(), LOCK_UN) != 0)
         return make_error(std::string("flock(LOCK_UN): ") + std::strerror(errno), errno);
     return {};
+}
+
+// ─── FileLock ─────────────────────────────────────────────────────────────────
+
+FileLock::~FileLock() = default;
+FileLock::FileLock(FileLock&&) noexcept = default;
+
+Result<FileLock> FileLock::acquire(const Path& p, LockMode mode) {
+    auto fh = open(p, OpenMode::Write | OpenMode::Create);
+    if (!fh) return propagate<FileLock>(fh);
+    auto r = lock_file(*fh, mode);
+    if (!r) return propagate<FileLock>(r);
+    FileLock lk;
+    lk.fh_ = std::move(*fh);
+    return lk;
 }
 
 // ─── Path utilities ───────────────────────────────────────────────────────────

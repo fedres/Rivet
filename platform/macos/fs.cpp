@@ -16,6 +16,7 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <AvailabilityMacros.h>
+#include <copyfile.h>
 #include <ftw.h>
 
 namespace rivet::fs {
@@ -125,8 +126,11 @@ Result<void> remove_all(const Path& p) {
 }
 
 Result<void> copy_file(const Path& from, const Path& to) {
-    (void)from; (void)to;
-    return make_error("copy_file: not yet implemented");
+    // copyfile(3) handles APFS CoW clones, permissions, xattrs atomically.
+    if (::copyfile(from.c_str(), to.c_str(), nullptr,
+                   COPYFILE_ALL | COPYFILE_NOFOLLOW_SRC) != 0)
+        return make_error(std::string("copyfile: ") + std::strerror(errno), errno);
+    return {};
 }
 
 Result<void> rename_atomic(const Path& from, const Path& to) {
@@ -237,6 +241,21 @@ Path relative_to(const Path& p, const Path& base) {
 
 Path temp_path_near(const Path& near) {
     return near.parent_path() / (near.filename().string() + ".rivet_tmp");
+}
+
+// ─── FileLock ─────────────────────────────────────────────────────────────────
+
+FileLock::~FileLock() = default;
+FileLock::FileLock(FileLock&&) noexcept = default;
+
+Result<FileLock> FileLock::acquire(const Path& p, LockMode mode) {
+    auto fh = open(p, OpenMode::Write | OpenMode::Create);
+    if (!fh) return propagate<FileLock>(fh);
+    auto r = lock_file(*fh, mode);
+    if (!r) return propagate<FileLock>(r);
+    FileLock lk;
+    lk.fh_ = std::move(*fh);
+    return lk;
 }
 
 } // namespace rivet::fs

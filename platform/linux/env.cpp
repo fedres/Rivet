@@ -97,4 +97,6 @@ std::string host_triple() {
     }
 }
 
+std::optional<Path> windows_sdk_dir() { return std::nullopt; }
+
 } // namespace rivet::env

@@ -1,0 +1,35 @@
+# rivet.toml — package manifest for the Rivet build system itself
+# Phase 5: self-hosting milestone — `rivet build rivet`
+
+[package]
+name        = "rivet"
+version     = "0.1.0"
+description = "A self-contained, zero-dependency C++ build system"
+authors     = ["The Rivet Contributors"]
+license     = "MIT"
+repository  = "https://github.com/rivet-lang/rivet"
+keywords    = ["build-system", "cpp", "toolchain"]
+
+[build]
+system  = "rivet"
+cxx_std = "c++23"
+targets = ["rivet"]
+
+[profiles.debug]
+opt_level = 0
+debug     = true
+
+[profiles.release]
+opt_level = 2
+debug     = false
+lto       = true
+
+[profiles.asan]
+opt_level  = 0
+debug      = true
+sanitizers = ["address", "undefined"]
+
+[profiles.tsan]
+opt_level  = 0
+debug      = true
+sanitizers = ["thread"]

@@ -4,14 +4,18 @@
 #include "../../platform/interface/env.hpp"
 #include "../../platform/interface/fs.hpp"
 #include "../../platform/interface/time.hpp"
+#include "runtime/version.hpp"
 #include "../build/graph.hpp"
 #include "../build/executor.hpp"
 #include "../build/scheduler.hpp"
 #include "../cache/store.hpp"
+#include "../cache/key.hpp"
 #include "../package/manifest.hpp"
 #include "../package/lockfile.hpp"
 #include "../toolchain/discovery.hpp"
+#include "../toolchain/compile.hpp"
 #include "../daemon/daemon.hpp"
+#include "../../platform/interface/net.hpp"
 
 #include <cstring>
 #include <iostream>
@@ -52,6 +56,8 @@ static void print_usage() {
         "  cache       Manage the local build cache\n"
         "  daemon      Manage the compiler daemon\n"
         "  toolchain   Manage bundled toolchain versions\n"
+        "  fuzz        Run a fuzz target with libFuzzer\n"
+        "  self-update Update rivet to the latest released version\n"
         "  version     Print version information\n"
         "  help        Show this help message\n"
         "\n"
@@ -72,9 +78,11 @@ int run(const Context& ctx) {
     if (sub == "remove")   return cmd_remove(ctx);
     if (sub == "new")      return cmd_new(ctx);
     if (sub == "publish")  return cmd_publish(ctx);
-    if (sub == "cache")    return cmd_cache(ctx);
-    if (sub == "daemon")   return cmd_daemon(ctx);
-    if (sub == "toolchain") return cmd_toolchain(ctx);
+    if (sub == "cache")       return cmd_cache(ctx);
+    if (sub == "daemon")      return cmd_daemon(ctx);
+    if (sub == "toolchain")   return cmd_toolchain(ctx);
+    if (sub == "fuzz")        return cmd_fuzz(ctx);
+    if (sub == "self-update") return cmd_self_update(ctx);
 
     std::cerr << "error: unknown command '" << sub << "'\n"
               << "Run 'rivet help' for a list of commands.\n";
@@ -87,7 +95,11 @@ int cmd_help(const Context& /*ctx*/) {
 }
 
 int cmd_version(const Context& /*ctx*/) {
-    std::cout << "rivet 0.1.0 (" << rivet::env::host_triple() << ")\n";
+    std::cout << "rivet " << rivet::kVersion
+              << " (" << rivet::kTargetTriple << ")";
+    if (!rivet::kGitHash.empty())
+        std::cout << " [" << rivet::kGitHash << "]";
+    std::cout << "\n";
     return 0;
 }
 
@@ -106,6 +118,62 @@ flag_value(const std::vector<std::string_view>& args, std::string_view flag) {
 }
 
 // ─── cmd_build ───────────────────────────────────────────────────────────────
+
+// Check if `output` is up to date relative to all deps listed in `dep_file`.
+// Returns true iff output exists and every listed dep is not newer than output.
+static bool is_up_to_date(const Path& output, const Path& dep_file) {
+    auto out_stat = rivet::fs::stat(output);
+    if (!out_stat) return false;
+    int64_t out_mtime = out_stat->mtime_ns;
+
+    auto dep_data = rivet::fs::read_file(dep_file);
+    if (!dep_data) return false;  // no dep file yet → must build
+
+    std::string_view text{reinterpret_cast<const char*>(dep_data->data()), dep_data->size()};
+
+    // Skip "output: " header to reach the dependency list.
+    auto colon = text.find(':');
+    if (colon == std::string_view::npos) return false;
+    text.remove_prefix(colon + 1);
+
+    // Walk whitespace-separated tokens; '\' at end-of-line is a continuation.
+    std::string dep;
+    dep.reserve(256);
+    for (char c : text) {
+        if (c == '\\' || c == '\n' || c == '\r' || c == ' ' || c == '\t') {
+            if (!dep.empty()) {
+                if (dep != "\\") {
+                    auto s = rivet::fs::stat(Path{dep});
+                    if (!s || s->mtime_ns > out_mtime) return false;
+                }
+                dep.clear();
+            }
+        } else {
+            dep += c;
+        }
+    }
+    if (!dep.empty() && dep != "\\") {
+        auto s = rivet::fs::stat(Path{dep});
+        if (!s || s->mtime_ns > out_mtime) return false;
+    }
+    return true;
+}
+
+// Recursively collect C++ source files under `dir` into `out`.
+static void collect_sources(const Path& dir, std::vector<Path>& out) {
+    auto entries_r = rivet::fs::list_dir(dir);
+    if (!entries_r) return;
+    for (const auto& entry : *entries_r) {
+        auto stat_r = rivet::fs::stat(entry);
+        if (stat_r && stat_r->is_dir) {
+            collect_sources(entry, out);
+            continue;
+        }
+        auto ext = entry.extension().string();
+        if (ext == ".cpp" || ext == ".cxx" || ext == ".cc")
+            out.push_back(entry);
+    }
+}
 
 int cmd_build(const Context& ctx) {
     auto args    = ctx.args_after_subcommand();
@@ -129,82 +197,174 @@ int cmd_build(const Context& ctx) {
     // 2. Discover toolchain.
     auto rivet_home_r = rivet::env::rivet_home();
     if (!rivet_home_r) {
-        std::cerr << "error: cannot determine rivet home: " << rivet_home_r.error().message << "\n";
+        std::cerr << "error: cannot determine rivet home: "
+                  << rivet_home_r.error().message << "\n";
         return 1;
     }
     const Path& rivet_home = *rivet_home_r;
 
     auto tc_r = rivet::toolchain::find_active(rivet_home);
     if (!tc_r) {
-        std::cerr << "error: " << tc_r.error().message << "\n";
+        std::cerr << "error: no toolchain available: " << tc_r.error().message << "\n"
+                  << "hint: run 'rivet toolchain install <version>' to install one.\n";
         return 1;
     }
     const auto& tc = *tc_r;
 
-    // 3. Determine build profile.
-    auto profile_name = flag_value(args, "--profile").value_or("debug");
+    // 3. Determine build profile and configuration.
+    auto profile_name = std::string{flag_value(args, "--profile").value_or("debug")};
+    bool is_release   = (profile_name == "release");
+
+    rivet::build::BuildConfig cfg;
+    cfg.cxx_std = manifest.build.cxx_std;
+    cfg.opt     = is_release ? rivet::build::OptLevel::O2 : rivet::build::OptLevel::Debug;
+    cfg.debug   = !is_release;
+
+    // Apply profile settings from manifest or built-in presets.
+    if (auto it = manifest.profiles.find(profile_name); it != manifest.profiles.end()) {
+        const auto& prof = it->second;
+        cfg.sanitizers = prof.sanitizers;
+        cfg.lto        = prof.lto;
+        cfg.debug      = prof.debug;
+        if (prof.opt_level.has_value()) {
+            switch (*prof.opt_level) {
+                case 0: cfg.opt = rivet::build::OptLevel::Debug; break;
+                case 1: cfg.opt = rivet::build::OptLevel::O1;    break;
+                case 2: cfg.opt = rivet::build::OptLevel::O2;    break;
+                case 3: cfg.opt = rivet::build::OptLevel::O3;    break;
+                default: break;
+            }
+        }
+        for (const auto& f : prof.extra_flags) cfg.extra_flags.push_back(f);
+    } else if (profile_name == "asan") {
+        cfg.sanitizers = {"address", "undefined"};
+    } else if (profile_name == "tsan") {
+        cfg.sanitizers = {"thread"};
+    } else if (profile_name == "msan") {
+        cfg.sanitizers = {"memory"};
+    } else if (profile_name == "ubsan") {
+        cfg.sanitizers = {"undefined"};
+    }
+
     std::cout << std::format("Building {} {} [{}] with clang {}\n",
         manifest.name, manifest.version, profile_name, tc.version);
 
-    // 4. Open cache.
-    auto cache_dir_r = rivet::env::cache_dir();
-    if (cache_dir_r) {
-        auto store_r = rivet::cache::Store::open(*cache_dir_r / "rivet" / "build");
-        // Cache is non-fatal if unavailable.
-        (void)store_r;
+    // 4. Open cache (non-fatal if unavailable).
+    std::optional<rivet::cache::Store> cache_store;
+    if (auto cache_dir_r = rivet::env::cache_dir()) {
+        if (auto store_r = rivet::cache::Store::open(*cache_dir_r / "rivet" / "build"))
+            cache_store = std::move(*store_r);
     }
 
-    // 5. Build graph + execute.
-    // A real implementation scans sources, creates TaskNodes, and runs the executor.
-    // Phase 2: emit a clear "no sources yet" message rather than silently succeeding.
+    // 5. Collect source files (recursive scan of src/).
     auto src_dir = manifest.root_dir / "src";
     if (!rivet::fs::exists(src_dir).value_or(false)) {
         std::cout << "warning: no src/ directory found — nothing to build.\n";
         return 0;
     }
 
-    auto sources_r = rivet::fs::list_dir(src_dir);
-    if (!sources_r || sources_r->empty()) {
-        std::cout << "warning: src/ is empty — nothing to build.\n";
+    std::vector<Path> sources;
+    collect_sources(src_dir, sources);
+
+    if (sources.empty()) {
+        std::cout << "warning: no C++ source files found in src/ — nothing to build.\n";
         return 0;
     }
 
+    // 6. Build the compile task graph.
     rivet::build::BuildGraph graph;
-    std::size_t compile_count = 0;
+    std::vector<rivet::build::TaskId> obj_task_ids;
+    std::vector<Path>                 obj_paths;
 
-    for (const auto& entry : *sources_r) {
-        auto ext = entry.extension().string();
-        if (ext != ".cpp" && ext != ".cxx" && ext != ".cc") continue;
+    auto obj_dir = manifest.root_dir / ".rivet" / "build" / profile_name / "obj";
 
-        auto out_path = manifest.root_dir / ".rivet" / "build" / "obj"
-                      / (entry.filename().string() + ".o");
+    for (const auto& src : sources) {
+        // .rivet/build/<profile>/obj/<rel_path>.o
+        auto rel      = src.lexically_relative(manifest.root_dir);
+        auto out_path = obj_dir / (rel.string() + ".o");
+
+        // Incremental build: skip recompile if output and all deps are fresh.
+        auto dep_file = out_path.parent_path() / (out_path.filename().string() + ".d");
+        if (is_up_to_date(out_path, dep_file)) {
+            rivet::build::TaskNode phony;
+            phony.name    = src.filename().string() + " (up to date)";
+            phony.kind    = rivet::build::TaskKind::Phony;
+            phony.outputs = {{ out_path, true }};
+            auto id = graph.add(std::move(phony));
+            obj_task_ids.push_back(id);
+            obj_paths.push_back(out_path);
+            continue;
+        }
+
+        auto cj    = rivet::toolchain::compile_job_from(src, out_path, cfg, tc);
+        auto cmd_r = rivet::toolchain::make_compile_command(cj, tc);
+        if (!cmd_r) {
+            std::cerr << "error building compile command: " << cmd_r.error().message << "\n";
+            return 1;
+        }
 
         rivet::build::TaskNode node;
-        node.name   = entry.filename().string();
-        node.kind   = rivet::build::TaskKind::Compile;
-        node.inputs = {{ entry, "" }};
-        node.outputs= {{ out_path, true }};
-        graph.add(std::move(node));
-        ++compile_count;
+        node.name    = src.filename().string();
+        node.kind    = rivet::build::TaskKind::Compile;
+        node.outputs = {{ out_path, true }};
+        node.command = std::move(*cmd_r);
+
+        // Hash source file for cache key derivation.
+        std::string src_hash;
+        if (auto hr = rivet::cache::sha256_file(src)) src_hash = std::move(*hr);
+        node.inputs = {{ src, std::move(src_hash) }};
+
+        // Derive cache key (command + input hashes must be populated first).
+        if (auto kr = rivet::cache::derive_key(node, tc.version, cfg.target_triple))
+            node.cache_key = std::move(*kr);
+
+        auto id = graph.add(std::move(node));
+        obj_task_ids.push_back(id);
+        obj_paths.push_back(out_path);
     }
 
-    if (compile_count == 0) {
-        std::cout << "warning: no C++ source files in src/ — nothing to build.\n";
-        return 0;
+    // 7. Link step: all object files → binary.
+    auto bin_dir    = manifest.root_dir / ".rivet" / "build" / profile_name / "bin";
+    auto bin_output = bin_dir / manifest.name;
+
+    rivet::toolchain::LinkJob lj;
+    lj.inputs        = obj_paths;
+    lj.output        = bin_output;
+    lj.target_triple = cfg.target_triple;
+    lj.lto           = cfg.lto;
+    lj.sanitizers    = cfg.sanitizers;
+
+    auto link_cmd_r = rivet::toolchain::make_link_command(lj, tc);
+    if (!link_cmd_r) {
+        std::cerr << "error building link command: " << link_cmd_r.error().message << "\n";
+        return 1;
     }
 
-    auto t_start  = rivet::time::now();
+    rivet::build::TaskNode link_node;
+    link_node.name    = manifest.name + " [link]";
+    link_node.kind    = rivet::build::TaskKind::Link;
+    link_node.deps    = obj_task_ids;
+    for (const auto& o : obj_paths) link_node.inputs.push_back({ o, "" });
+    link_node.outputs = {{ bin_output, true }};
+    link_node.command = std::move(*link_cmd_r);
+    graph.add(std::move(link_node));
+
+    // 8. Execute.
+    auto t_start = rivet::time::now();
     std::size_t jobs = std::thread::hardware_concurrency();
 
     auto on_progress = [](const rivet::build::TaskResult& r) {
-        if (r.success)
+        if (r.cache_hit)
+            std::cout << "  \033[34m●\033[0m " << r.task_id << " (cached)\n";
+        else if (r.success)
             std::cout << "  \033[32m✓\033[0m " << r.task_id << "\n";
         else
             std::cerr << "  \033[31m✗\033[0m " << r.task_id
                       << "\n" << r.stderr_out << "\n";
     };
 
-    rivet::build::Executor executor{graph, jobs, on_progress};
+    rivet::cache::Store* cache_ptr = cache_store ? &*cache_store : nullptr;
+    rivet::build::Executor executor{graph, jobs, on_progress, cache_ptr};
     auto summary = executor.run();
     auto elapsed = rivet::time::elapsed(t_start);
 
@@ -212,37 +372,271 @@ int cmd_build(const Context& ctx) {
         summary.succeeded,
         summary.cached,
         summary.failed,
-        static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()) / 1000.0);
+        static_cast<double>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()) / 1000.0);
+
+    if (summary.failed == 0)
+        std::cout << std::format("  Binary: {}\n", bin_output.string());
 
     return summary.failed == 0 ? 0 : 1;
 }
 
 // ─── cmd_test ────────────────────────────────────────────────────────────────
 
-int cmd_test(const Context& /*ctx*/) {
-    std::cerr << "error: 'test' command coming in Phase 2 milestone.\n"
-              << "       Build with a 'test' target in rivet.toml.\n";
-    return 1;
+int cmd_test(const Context& ctx) {
+    // Build first (reuse cmd_build).
+    int build_rc = cmd_build(ctx);
+    if (build_rc != 0) return build_rc;
+
+    auto cwd_opt = rivet::env::get("PWD");
+    Path cwd = cwd_opt ? Path{*cwd_opt} : Path{"."};
+    auto manifest_r = rivet::pkg::find_and_parse(cwd);
+    if (!manifest_r) return 1;
+    const auto& manifest = *manifest_r;
+
+    auto args       = ctx.args_after_subcommand();
+    auto profile    = std::string{flag_value(args, "--profile").value_or("debug")};
+    auto tests_dir  = manifest.root_dir / "tests";
+
+    if (!rivet::fs::exists(tests_dir).value_or(false)) {
+        std::cout << "warning: no tests/ directory found.\n";
+        return 0;
+    }
+
+    // Collect test source files.
+    std::vector<Path> test_sources;
+    collect_sources(tests_dir, test_sources);
+    if (test_sources.empty()) {
+        std::cout << "warning: no test source files found.\n";
+        return 0;
+    }
+
+    // Find the active toolchain.
+    auto rivet_home_r = rivet::env::rivet_home();
+    if (!rivet_home_r) return 1;
+    auto tc_r = rivet::toolchain::find_active(*rivet_home_r);
+    if (!tc_r) {
+        std::cerr << "error: no toolchain: " << tc_r.error().message << "\n";
+        return 1;
+    }
+
+    rivet::build::BuildConfig cfg;
+    cfg.cxx_std = manifest.build.cxx_std;
+    cfg.opt     = rivet::build::OptLevel::Debug;
+    cfg.debug   = true;
+
+    rivet::build::BuildGraph graph;
+    std::vector<rivet::build::TaskId> obj_ids;
+    std::vector<Path> obj_paths;
+    auto obj_dir = manifest.root_dir / ".rivet" / "build" / profile / "test_obj";
+
+    for (const auto& src : test_sources) {
+        auto rel      = src.lexically_relative(manifest.root_dir);
+        auto out_path = obj_dir / (rel.string() + ".o");
+        auto cj       = rivet::toolchain::compile_job_from(src, out_path, cfg, *tc_r);
+        if (auto cmd_r = rivet::toolchain::make_compile_command(cj, *tc_r)) {
+            rivet::build::TaskNode node;
+            node.name    = src.filename().string();
+            node.kind    = rivet::build::TaskKind::Compile;
+            node.inputs  = {{ src, "" }};
+            node.outputs = {{ out_path, true }};
+            node.command = std::move(*cmd_r);
+            auto id = graph.add(std::move(node));
+            obj_ids.push_back(id);
+            obj_paths.push_back(out_path);
+        }
+    }
+
+    auto test_bin = manifest.root_dir / ".rivet" / "build" / profile / "bin"
+                  / (manifest.name + "-test");
+    rivet::toolchain::LinkJob lj;
+    lj.inputs  = obj_paths;
+    lj.output  = test_bin;
+
+    if (auto link_r = rivet::toolchain::make_link_command(lj, *tc_r)) {
+        rivet::build::TaskNode link_node;
+        link_node.name    = manifest.name + "-test [link]";
+        link_node.kind    = rivet::build::TaskKind::Link;
+        link_node.deps    = obj_ids;
+        for (const auto& o : obj_paths) link_node.inputs.push_back({ o, "" });
+        link_node.outputs = {{ test_bin, true }};
+        link_node.command = std::move(*link_r);
+        graph.add(std::move(link_node));
+    }
+
+    rivet::build::Executor executor{graph, std::thread::hardware_concurrency()};
+    auto summary = executor.run();
+    if (summary.failed) {
+        std::cerr << "error: test build failed.\n";
+        return 1;
+    }
+
+    // Run the test binary.
+    std::cout << std::format("Running tests: {}\n", test_bin.string());
+    rivet::process::SpawnOptions run_opts;
+    run_opts.args        = {test_bin.string()};
+    run_opts.inherit_env = true;
+
+    auto child_r = rivet::process::spawn(std::move(run_opts));
+    if (!child_r) {
+        std::cerr << "error: could not run tests: " << child_r.error().message << "\n";
+        return 1;
+    }
+    auto wait_r = child_r->wait();
+    int rc      = wait_r.value_or(1);
+    if (rc == 0)
+        std::cout << "  All tests passed.\n";
+    else
+        std::cerr << std::format("  Tests failed (exit {}).\n", rc);
+    return rc;
 }
 
 // ─── cmd_run ─────────────────────────────────────────────────────────────────
 
-int cmd_run(const Context& /*ctx*/) {
-    std::cerr << "error: 'run' command coming in Phase 2 milestone.\n";
-    return 1;
+int cmd_run(const Context& ctx) {
+    // Build first.
+    int build_rc = cmd_build(ctx);
+    if (build_rc != 0) return build_rc;
+
+    auto cwd_opt = rivet::env::get("PWD");
+    Path cwd = cwd_opt ? Path{*cwd_opt} : Path{"."};
+    auto manifest_r = rivet::pkg::find_and_parse(cwd);
+    if (!manifest_r) return 1;
+    const auto& manifest = *manifest_r;
+
+    auto args    = ctx.args_after_subcommand();
+    auto profile = std::string{flag_value(args, "--profile").value_or("debug")};
+    auto binary  = manifest.root_dir / ".rivet" / "build" / profile / "bin" / manifest.name;
+
+    if (!rivet::fs::exists(binary).value_or(false)) {
+        std::cerr << "error: binary not found: " << binary.string() << "\n";
+        return 1;
+    }
+
+    // Collect any arguments after "--".
+    std::vector<std::string> run_args;
+    run_args.push_back(binary.string());
+    bool past_sep = false;
+    for (const auto& a : args) {
+        if (a == "--") { past_sep = true; continue; }
+        if (past_sep) run_args.emplace_back(a);
+    }
+
+    rivet::process::SpawnOptions run_opts;
+    run_opts.args        = std::move(run_args);
+    run_opts.inherit_env = true;
+
+    auto child_r = rivet::process::spawn(std::move(run_opts));
+    if (!child_r) {
+        std::cerr << "error: " << child_r.error().message << "\n";
+        return 1;
+    }
+    auto wait_r = child_r->wait();
+    return wait_r.value_or(1);
 }
 
 // ─── cmd_add ─────────────────────────────────────────────────────────────────
 
+// Extract "value" from {"key":"value",...} JSON — minimal, for well-formed registry JSON.
+static std::string json_str(const std::string& json, const std::string& key) {
+    std::string needle = "\"" + key + "\":\"";
+    auto pos = json.find(needle);
+    if (pos == std::string::npos) return {};
+    pos += needle.size();
+    std::string val;
+    while (pos < json.size() && json[pos] != '"') {
+        if (json[pos] == '\\' && pos + 1 < json.size()) { ++pos; }
+        val += json[pos++];
+    }
+    return val;
+}
+
 int cmd_add(const Context& ctx) {
     auto args = ctx.args_after_subcommand();
     if (args.empty()) {
-        std::cerr << "usage: rivet add <package>[@version]\n";
+        std::cerr << "usage: rivet add <package>[@version]\n"
+                  << "       rivet add fmt@10.2.0\n";
         return 1;
     }
-    std::cerr << "error: package registry not yet available (Phase 3).\n"
-              << "hint:  add a [dependencies] entry manually to rivet.toml.\n";
-    return 1;
+
+    // Parse <name>[@version].
+    std::string pkg_spec{args[0]};
+    std::string pkg_name, pkg_version;
+    auto at = pkg_spec.find('@');
+    if (at != std::string::npos) {
+        pkg_name    = pkg_spec.substr(0, at);
+        pkg_version = pkg_spec.substr(at + 1);
+    } else {
+        pkg_name = pkg_spec;
+    }
+
+    for (char c : pkg_name) {
+        if (!std::isalnum((unsigned char)c) && c != '_' && c != '-') {
+            std::cerr << "error: invalid package name '" << pkg_name
+                      << "': only a-z, 0-9, _, - allowed\n";
+            return 1;
+        }
+    }
+
+    // Find manifest.
+    auto cwd_opt = rivet::env::get("PWD");
+    Path cwd = cwd_opt ? Path{*cwd_opt} : Path{"."};
+    auto manifest_r = rivet::pkg::find_and_parse(cwd);
+    if (!manifest_r) {
+        std::cerr << "error: " << manifest_r.error().message << "\n";
+        return 1;
+    }
+    auto manifest = *manifest_r;
+
+    // If no version given, query registry for latest.
+    if (pkg_version.empty()) {
+        std::cout << std::format("Resolving {}...\n", pkg_name);
+
+        std::string registry_base =
+            rivet::env::get("RIVET_REGISTRY_URL")
+                .value_or("https://registry.cx.dev");
+        std::string url_str = registry_base + "/api/v1/packages/" + pkg_name;
+
+        (void)rivet::net::init_tls_trust_store();
+        if (auto url_r = rivet::net::Url::parse(url_str)) {
+            if (auto resp = rivet::net::http_get(*url_r); resp && resp->ok()) {
+                auto body = resp->body_str();
+                pkg_version = json_str(body, "version");
+            }
+        }
+
+        if (pkg_version.empty()) {
+            std::cout << "note: registry not reachable — pinning to '*' (any version).\n"
+                      << "      Update rivet.toml manually when a version is known.\n";
+            pkg_version = "*";
+        }
+    }
+
+    bool updating = manifest.dependencies.count(pkg_name) > 0;
+    std::cout << std::format("{} {} = \"{}\"\n",
+        updating ? "Updating" : "Adding", pkg_name, pkg_version);
+
+    rivet::pkg::DepSpec spec;
+    spec.kind    = rivet::pkg::DepKind::Registry;
+    spec.version = pkg_version;
+    manifest.dependencies[pkg_name] = std::move(spec);
+
+    // Re-serialise rivet.toml.
+    auto toml_text  = rivet::pkg::serialize(manifest);
+    auto toml_bytes = rivet::ByteSpan{
+        reinterpret_cast<const std::byte*>(toml_text.data()), toml_text.size()};
+    if (auto r = rivet::fs::write_atomic(manifest.root_dir / "rivet.toml", toml_bytes); !r) {
+        std::cerr << "error: could not update rivet.toml: " << r.error().message << "\n";
+        return 1;
+    }
+
+    // Regenerate lock file.
+    if (auto lock_r = rivet::pkg::resolve(manifest)) {
+        (void)rivet::pkg::write_lockfile(*lock_r, manifest.root_dir / "rivet.lock");
+    }
+
+    std::cout << std::format("  {} \"{}\" written to rivet.toml\n", pkg_name, pkg_version);
+    return 0;
 }
 
 // ─── cmd_remove ──────────────────────────────────────────────────────────────
@@ -253,8 +647,37 @@ int cmd_remove(const Context& ctx) {
         std::cerr << "usage: rivet remove <package>\n";
         return 1;
     }
-    std::cerr << "error: package registry not yet available (Phase 3).\n";
-    return 1;
+    std::string pkg_name{args[0]};
+
+    auto cwd_opt = rivet::env::get("PWD");
+    Path cwd = cwd_opt ? Path{*cwd_opt} : Path{"."};
+    auto manifest_r = rivet::pkg::find_and_parse(cwd);
+    if (!manifest_r) {
+        std::cerr << "error: " << manifest_r.error().message << "\n";
+        return 1;
+    }
+    auto manifest = *manifest_r;
+
+    if (!manifest.dependencies.count(pkg_name)) {
+        std::cerr << "error: package '" << pkg_name << "' is not a dependency.\n";
+        return 1;
+    }
+
+    manifest.dependencies.erase(pkg_name);
+
+    auto toml_text  = rivet::pkg::serialize(manifest);
+    auto toml_bytes = rivet::ByteSpan{
+        reinterpret_cast<const std::byte*>(toml_text.data()), toml_text.size()};
+    if (auto r = rivet::fs::write_atomic(manifest.root_dir / "rivet.toml", toml_bytes); !r) {
+        std::cerr << "error: could not update rivet.toml: " << r.error().message << "\n";
+        return 1;
+    }
+
+    if (auto lock_r = rivet::pkg::resolve(manifest))
+        (void)rivet::pkg::write_lockfile(*lock_r, manifest.root_dir / "rivet.lock");
+
+    std::cout << std::format("  Removed {} from rivet.toml\n", pkg_name);
+    return 0;
 }
 
 // ─── cmd_new ─────────────────────────────────────────────────────────────────
@@ -325,9 +748,95 @@ int cmd_new(const Context& ctx) {
 
 // ─── cmd_publish ─────────────────────────────────────────────────────────────
 
-int cmd_publish(const Context& /*ctx*/) {
-    std::cerr << "error: publishing not yet available (Phase 3).\n";
-    return 1;
+int cmd_publish(const Context& ctx) {
+    auto args = ctx.args_after_subcommand();
+
+    auto cwd_opt = rivet::env::get("PWD");
+    Path cwd = cwd_opt ? Path{*cwd_opt} : Path{"."};
+    auto manifest_r = rivet::pkg::find_and_parse(cwd);
+    if (!manifest_r) {
+        std::cerr << "error: " << manifest_r.error().message << "\n";
+        return 1;
+    }
+    const auto& manifest = *manifest_r;
+
+    if (auto vr = rivet::pkg::validate(manifest); !vr) {
+        std::cerr << "error: " << vr.error().message << "\n";
+        return 1;
+    }
+
+    // Check for API token.
+    auto token_opt = rivet::env::get("RIVET_REGISTRY_TOKEN");
+    if (!token_opt) {
+        std::cerr << "error: RIVET_REGISTRY_TOKEN not set.\n"
+                  << "hint:  get a token at https://registry.cx.dev/tokens\n";
+        return 1;
+    }
+
+    // Build a source archive: tar.zst of the project (excluding .rivet/, build/).
+    auto archive_name = std::format("{}-{}.tar.zst", manifest.name, manifest.version);
+    auto archive_path = rivet::fs::temp_path_near(cwd / ".rivet" / archive_name);
+
+    // Ensure .rivet dir exists for temp file placement.
+    (void)rivet::fs::create_dirs(cwd / ".rivet");
+
+    std::cout << std::format("Packing {} v{}...\n", manifest.name, manifest.version);
+
+    rivet::process::SpawnOptions tar_opts;
+    tar_opts.args = {"tar", "--zstd", "-cf", archive_path.string(),
+                     "--exclude=.rivet", "--exclude=build", "--exclude=.git",
+                     "-C", manifest.root_dir.string(), "."};
+    tar_opts.inherit_env    = true;
+    tar_opts.capture_stderr = true;
+
+    auto child_r = rivet::process::spawn(std::move(tar_opts));
+    if (!child_r) {
+        std::cerr << "error: tar failed: " << child_r.error().message << "\n";
+        return 1;
+    }
+    auto wait_r = child_r->wait();
+    if (!wait_r || *wait_r != 0) {
+        std::cerr << "error: tar exited " << wait_r.value_or(-1) << "\n"
+                  << child_r->stderr_output() << "\n";
+        (void)rivet::fs::remove_file(archive_path);
+        return 1;
+    }
+
+    // Read archive bytes.
+    auto data = rivet::fs::read_file(archive_path);
+    (void)rivet::fs::remove_file(archive_path);
+    if (!data) {
+        std::cerr << "error: could not read packed archive.\n";
+        return 1;
+    }
+
+    std::cout << std::format("Uploading {} ({} KB)...\n",
+        archive_name, data->size() / 1024);
+
+    std::string registry_base =
+        rivet::env::get("RIVET_REGISTRY_URL")
+            .value_or("https://registry.cx.dev");
+
+    (void)rivet::net::init_tls_trust_store();
+    rivet::net::HttpClient client{registry_base,
+        rivet::net::RequestOptions{
+            .headers = {{"Authorization", "Bearer " + *token_opt}}}};
+
+    auto resp = client.put(
+        "/api/v1/publish",
+        rivet::ByteSpan{data->data(), data->size()},
+        "application/x-tar+zstd");
+
+    if (!resp || !resp->ok()) {
+        int code = resp ? resp->status_code : 0;
+        std::cerr << std::format("error: publish failed (HTTP {})\n", code);
+        if (resp) std::cerr << resp->body_str() << "\n";
+        return 1;
+    }
+
+    std::cout << std::format("  Published {} v{} to {}\n",
+        manifest.name, manifest.version, registry_base);
+    return 0;
 }
 
 // ─── cmd_cache ───────────────────────────────────────────────────────────────
@@ -476,11 +985,114 @@ int cmd_toolchain(const Context& ctx) {
                       << "example: rivet toolchain install 18.1.0\n";
             return 1;
         }
-        // TODO Phase 2: download the toolchain bundle from releases.
-        std::cerr << "error: bundled toolchain download not yet implemented.\n"
-                  << "hint:  manually place the toolchain at "
-                  << (*rivet_home_r / "toolchains" / std::string{args[1]}).string() << "\n";
-        return 1;
+        std::string version{args[1]};
+
+        // Already installed?
+        if (auto installed_r = rivet::toolchain::list_installed(*rivet_home_r)) {
+            for (const auto& tc : *installed_r) {
+                if (tc.version == version) {
+                    std::cout << std::format("toolchain clang-{} already installed at {}\n",
+                        version, tc.root.string());
+                    return 0;
+                }
+            }
+        }
+
+        // Determine download triple.
+        std::string triple;
+#if defined(__APPLE__)
+#  if defined(__aarch64__)
+        triple = "arm64-apple-macos";
+#  else
+        triple = "x86_64-apple-macos";
+#  endif
+#elif defined(__linux__)
+#  if defined(__aarch64__)
+        triple = "arm64-linux-gnu";
+#  else
+        triple = "x86_64-linux-gnu";
+#  endif
+#elif defined(_WIN32)
+        triple = "x86_64-windows-msvc";
+#else
+        triple = "unknown";
+#endif
+
+        std::string archive_name = std::format(
+            "rivet-toolchain-clang-{}-{}.tar.zst", version, triple);
+        std::string url_str = std::format(
+            "https://github.com/rivet-lang/rivet/releases/download/v{}/{}",
+            version, archive_name);
+
+        auto url_r = rivet::net::Url::parse(url_str);
+        if (!url_r) {
+            std::cerr << "error: malformed URL: " << url_r.error().message << "\n";
+            return 1;
+        }
+
+        // Ensure toolchains dir exists.
+        auto tc_dir      = *rivet_home_r / "toolchains" / version;
+        auto toolchains  = *rivet_home_r / "toolchains";
+        if (auto r = rivet::fs::create_dirs(toolchains); !r) {
+            std::cerr << "error: " << r.error().message << "\n";
+            return 1;
+        }
+
+        auto tmp_archive = rivet::fs::temp_path_near(toolchains / ".tmp");
+
+        std::cout << std::format("Downloading clang-{} for {}...\n", version, triple);
+
+        auto progress = [](uint64_t done, uint64_t total) {
+            if (total > 0) {
+                int pct = static_cast<int>(done * 100 / total);
+                std::cout << std::format("\r  {}%  ({} MB / {} MB)",
+                    pct, done >> 20, total >> 20) << std::flush;
+            }
+        };
+
+        (void)rivet::net::init_tls_trust_store();
+        auto dl = rivet::net::download_file(*url_r, tmp_archive, {}, progress);
+        std::cout << "\n";
+        if (!dl) {
+            (void)rivet::fs::remove_file(tmp_archive);
+            std::cerr << "error: download failed: " << dl.error().message << "\n";
+            return 1;
+        }
+
+        // Extract archive.
+        if (auto r = rivet::fs::create_dirs(tc_dir); !r) {
+            std::cerr << "error: " << r.error().message << "\n";
+            (void)rivet::fs::remove_file(tmp_archive);
+            return 1;
+        }
+
+        rivet::process::SpawnOptions tar_opts;
+        tar_opts.args = {"tar", "--zstd", "-xf", tmp_archive.string(),
+                         "-C", tc_dir.string(), "--strip-components=1"};
+        tar_opts.inherit_env     = true;
+        tar_opts.capture_stdout  = false;
+        tar_opts.capture_stderr  = true;
+
+        auto child_r = rivet::process::spawn(std::move(tar_opts));
+        (void)rivet::fs::remove_file(tmp_archive);
+        if (!child_r) {
+            std::cerr << "error: extraction failed: " << child_r.error().message << "\n";
+            return 1;
+        }
+
+        auto wait_r = child_r->wait();
+        if (!wait_r || *wait_r != 0) {
+            std::cerr << std::format("error: extraction failed (exit {})\n",
+                wait_r.value_or(-1));
+            std::cerr << child_r->stderr_output() << "\n";
+            return 1;
+        }
+
+        // Activate the newly installed toolchain.
+        (void)rivet::toolchain::set_active(*rivet_home_r, version);
+        std::cout << std::format("Installed clang-{} → {}\n", version, tc_dir.string());
+        std::cout << std::format("Run 'rivet toolchain use {}' to switch to it.\n", version);
+        return 0;
     }
 
     if (sub == "use") {
@@ -506,6 +1118,287 @@ int cmd_toolchain(const Context& ctx) {
 
     std::cerr << "usage: rivet toolchain [list|install|use|active]\n";
     return 1;
+}
+
+// ─── cmd_fuzz ─────────────────────────────────────────────────────────────────
+//
+// Phase 4: libFuzzer integration. Compiles the target with -fsanitize=fuzzer
+// and launches the fuzz loop. RIVET_FUZZ_TARGET names the entry-point function.
+
+int cmd_fuzz(const Context& ctx) {
+    auto args = ctx.args_after_subcommand();
+
+    auto cwd_opt = rivet::env::get("PWD");
+    Path cwd = cwd_opt ? Path{*cwd_opt} : Path{"."};
+    auto manifest_r = rivet::pkg::find_and_parse(cwd);
+    if (!manifest_r) {
+        std::cerr << "error: " << manifest_r.error().message << "\n";
+        return 1;
+    }
+    const auto& manifest = *manifest_r;
+
+    // Default target: look for RIVET_FUZZ_TARGET env var or first positional arg.
+    std::string target_fn;
+    if (!args.empty()) target_fn = std::string{args[0]};
+    if (target_fn.empty()) {
+        if (auto t = rivet::env::get("RIVET_FUZZ_TARGET")) target_fn = *t;
+    }
+    if (target_fn.empty()) {
+        std::cerr << "usage: rivet fuzz <target_function>\n"
+                  << "       or set RIVET_FUZZ_TARGET in the environment\n";
+        return 1;
+    }
+
+    auto rivet_home_r = rivet::env::rivet_home();
+    if (!rivet_home_r) return 1;
+    auto tc_r = rivet::toolchain::find_active(*rivet_home_r);
+    if (!tc_r) {
+        std::cerr << "error: no toolchain: " << tc_r.error().message << "\n";
+        return 1;
+    }
+
+    // Build with fuzzer sanitizer + address sanitizer.
+    rivet::build::BuildConfig cfg;
+    cfg.cxx_std    = manifest.build.cxx_std;
+    cfg.opt        = rivet::build::OptLevel::Debug;
+    cfg.debug      = true;
+    cfg.sanitizers = {"fuzzer", "address"};
+    cfg.extra_flags = {"-DRIVET_FUZZ_TARGET=" + target_fn};
+
+    auto src_dir = manifest.root_dir / "fuzz";
+    if (!rivet::fs::exists(src_dir).value_or(false))
+        src_dir = manifest.root_dir / "src";
+
+    std::vector<Path> sources;
+    collect_sources(src_dir, sources);
+    if (sources.empty()) {
+        std::cerr << "error: no source files found for fuzzing in " << src_dir.string() << "\n";
+        return 1;
+    }
+
+    rivet::build::BuildGraph graph;
+    std::vector<rivet::build::TaskId> obj_ids;
+    std::vector<Path> obj_paths;
+    auto obj_dir = manifest.root_dir / ".rivet" / "build" / "fuzz" / "obj";
+
+    for (const auto& src : sources) {
+        auto rel      = src.lexically_relative(manifest.root_dir);
+        auto out_path = obj_dir / (rel.string() + ".o");
+        auto cj       = rivet::toolchain::compile_job_from(src, out_path, cfg, *tc_r);
+        auto cmd_r    = rivet::toolchain::make_compile_command(cj, *tc_r);
+        if (!cmd_r) continue;
+
+        rivet::build::TaskNode node;
+        node.name    = src.filename().string();
+        node.kind    = rivet::build::TaskKind::Compile;
+        node.outputs = {{ out_path, true }};
+        node.command = std::move(*cmd_r);
+        std::string src_hash;
+        if (auto hr = rivet::cache::sha256_file(src)) src_hash = std::move(*hr);
+        node.inputs  = {{ src, std::move(src_hash) }};
+        auto id = graph.add(std::move(node));
+        obj_ids.push_back(id);
+        obj_paths.push_back(out_path);
+    }
+
+    auto fuzz_bin = manifest.root_dir / ".rivet" / "build" / "fuzz" / "bin"
+                  / (manifest.name + "-fuzz-" + target_fn);
+
+    rivet::toolchain::LinkJob lj;
+    lj.inputs     = obj_paths;
+    lj.output     = fuzz_bin;
+    lj.sanitizers = {"fuzzer", "address"};
+
+    if (auto link_r = rivet::toolchain::make_link_command(lj, *tc_r)) {
+        rivet::build::TaskNode link_node;
+        link_node.name    = manifest.name + "-fuzz [link]";
+        link_node.kind    = rivet::build::TaskKind::Link;
+        link_node.deps    = obj_ids;
+        for (const auto& o : obj_paths) link_node.inputs.push_back({ o, "" });
+        link_node.outputs = {{ fuzz_bin, true }};
+        link_node.command = std::move(*link_r);
+        graph.add(std::move(link_node));
+    }
+
+    rivet::build::Executor executor{graph, std::thread::hardware_concurrency()};
+    auto summary = executor.run();
+    if (summary.failed) {
+        std::cerr << "error: fuzz build failed.\n";
+        return 1;
+    }
+
+    std::cout << std::format("Running fuzzer: {}\n", fuzz_bin.string());
+
+    // Collect any corpus directories / libFuzzer flags after "--".
+    std::vector<std::string> fuzz_args;
+    fuzz_args.push_back(fuzz_bin.string());
+    bool past_sep = false;
+    for (const auto& a : args) {
+        if (a == "--") { past_sep = true; continue; }
+        if (past_sep) fuzz_args.emplace_back(a);
+    }
+    // Default: run indefinitely with -runs=-1.
+    if (!past_sep) fuzz_args.push_back("-runs=-1");
+
+    rivet::process::SpawnOptions run_opts;
+    run_opts.args        = std::move(fuzz_args);
+    run_opts.inherit_env = true;
+
+    auto child_r = rivet::process::spawn(std::move(run_opts));
+    if (!child_r) {
+        std::cerr << "error: " << child_r.error().message << "\n";
+        return 1;
+    }
+    auto wait_r = child_r->wait();
+    return wait_r.value_or(1);
+}
+
+// ─── cmd_self_update ─────────────────────────────────────────────────────────
+//
+// Phase 5 self-hosting milestone: rivet can update itself from GitHub releases.
+// Downloads the latest bundle for the current platform, verifies checksum,
+// extracts the new binary, and atomically replaces the running executable.
+
+int cmd_self_update(const Context& /*ctx*/) {
+    // Determine current platform triple (matches ci/bundle.sh naming).
+    std::string triple;
+#if defined(__APPLE__)
+#  if defined(__aarch64__)
+    triple = "arm64-apple-macos";
+#  else
+    triple = "x86_64-apple-macos";
+#  endif
+#elif defined(__linux__)
+#  if defined(__aarch64__)
+    triple = "arm64-linux-gnu";
+#  else
+    triple = "x86_64-linux-gnu";
+#  endif
+#elif defined(_WIN32)
+    triple = "x86_64-windows-msvc";
+#else
+    std::cerr << "error: self-update not supported on this platform.\n";
+    return 1;
+#endif
+
+    // Fetch the latest release version from GitHub.
+    std::cout << "Checking for latest rivet release...\n";
+
+    (void)rivet::net::init_tls_trust_store();
+
+    auto api_url_r = rivet::net::Url::parse(
+        "https://api.github.com/repos/rivet-lang/rivet/releases/latest");
+    if (!api_url_r) {
+        std::cerr << "error: " << api_url_r.error().message << "\n";
+        return 1;
+    }
+
+    auto resp = rivet::net::http_get(*api_url_r,
+        rivet::net::RequestOptions{
+            .headers = {{"Accept", "application/vnd.github+json"},
+                        {"User-Agent", std::format("rivet/{}", rivet::kVersion)}}});
+
+    if (!resp || !resp->ok()) {
+        std::cerr << "error: could not reach GitHub API.\n";
+        return 1;
+    }
+
+    // Extract "tag_name" from JSON (format: "v0.2.1").
+    auto tag = json_str(resp->body_str(), "tag_name");
+    if (tag.empty()) {
+        std::cerr << "error: could not parse release tag.\n";
+        return 1;
+    }
+
+    // Strip leading 'v'.
+    std::string latest_version = (tag[0] == 'v') ? tag.substr(1) : tag;
+
+    if (latest_version == rivet::kVersion) {
+        std::cout << std::format("rivet {} is already up to date.\n", rivet::kVersion);
+        return 0;
+    }
+
+    std::cout << std::format("Updating rivet {} → {}...\n",
+        rivet::kVersion, latest_version);
+
+    // Determine own executable path.
+    auto self_r = rivet::process::self_exe();
+    if (!self_r) {
+        std::cerr << "error: cannot locate running executable: "
+                  << self_r.error().message << "\n";
+        return 1;
+    }
+
+    // Download the new bundle.
+    std::string archive_name = std::format("rivet-{}-{}.tar.zst", latest_version, triple);
+    std::string dl_url       = std::format(
+        "https://github.com/rivet-lang/rivet/releases/download/v{}/{}",
+        latest_version, archive_name);
+
+    auto dl_url_r = rivet::net::Url::parse(dl_url);
+    if (!dl_url_r) {
+        std::cerr << "error: " << dl_url_r.error().message << "\n";
+        return 1;
+    }
+
+    auto tmp_archive = rivet::fs::temp_path_near(*self_r);
+
+    auto progress = [](uint64_t done, uint64_t total) {
+        if (total > 0)
+            std::cout << std::format("\r  {}%  ({} KB / {} KB)",
+                done * 100 / total, done >> 10, total >> 10) << std::flush;
+    };
+
+    auto dl = rivet::net::download_file(*dl_url_r, tmp_archive, {}, progress);
+    std::cout << "\n";
+    if (!dl) {
+        (void)rivet::fs::remove_file(tmp_archive);
+        std::cerr << "error: download failed: " << dl.error().message << "\n";
+        return 1;
+    }
+
+    // Extract the new binary to a temp path next to the running binary.
+    auto tmp_bin = rivet::fs::temp_path_near(*self_r);
+
+    rivet::process::SpawnOptions tar_opts;
+    tar_opts.args = {"tar", "--zstd", "-xOf", tmp_archive.string(), "bin/rivet"};
+    tar_opts.inherit_env    = true;
+    tar_opts.capture_stdout = true;
+    tar_opts.capture_stderr = true;
+
+    auto child_r = rivet::process::spawn(std::move(tar_opts));
+    (void)rivet::fs::remove_file(tmp_archive);
+    if (!child_r) {
+        std::cerr << "error: extraction failed: " << child_r.error().message << "\n";
+        return 1;
+    }
+
+    // Write the extracted binary bytes atomically next to the running exe.
+    auto wait_r = child_r->wait();
+    if (!wait_r || *wait_r != 0) {
+        std::cerr << std::format("error: tar exited {}\n", wait_r.value_or(-1));
+        return 1;
+    }
+
+    auto stdout_bytes = child_r->stdout_output();
+    auto bin_bytes    = rivet::ByteSpan{
+        reinterpret_cast<const std::byte*>(stdout_bytes.data()), stdout_bytes.size()};
+
+    if (auto wr = rivet::fs::write_atomic(tmp_bin, bin_bytes); !wr) {
+        std::cerr << "error: could not write new binary: " << wr.error().message << "\n";
+        return 1;
+    }
+
+    // Atomically replace running binary.
+    if (auto rr = rivet::fs::rename_atomic(tmp_bin, *self_r); !rr) {
+        (void)rivet::fs::remove_file(tmp_bin);
+        std::cerr << "error: could not replace binary: " << rr.error().message << "\n";
+        return 1;
+    }
+
+    std::cout << std::format("  Updated to rivet {} at {}\n",
+        latest_version, self_r->string());
+    return 0;
 }
 
 } // namespace rivet::cli

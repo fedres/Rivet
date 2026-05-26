@@ -50,6 +50,11 @@ void                                     unset(std::string_view key);
 // System-appropriate temp directory.
 [[nodiscard]] Result<Path> temp_dir();
 
+// Windows-only: root of the installed Windows SDK.
+// Returns the KitsRoot10 registry value on Windows; empty optional on other platforms.
+// Example: "C:\\Program Files (x86)\\Windows Kits\\10\\"
+[[nodiscard]] std::optional<Path> windows_sdk_dir();
+
 // ─── Architecture / platform ─────────────────────────────────────────────────
 
 enum class Arch   { X64, Arm64, Unknown };

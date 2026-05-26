@@ -76,11 +76,8 @@ class AsyncOutputReader {
 public:
     virtual ~AsyncOutputReader() = default;
 
-    // Register a callback invoked once per complete line (no newline in arg).
-    void on_line(std::function<void(std::string_view)> cb);
-
-    // Register a callback invoked when the stream closes.
-    void on_close(std::function<void()> cb);
+    void on_line(std::function<void(std::string_view)> cb) { line_cb_ = std::move(cb); }
+    void on_close(std::function<void()> cb)                { close_cb_ = std::move(cb); }
 
     virtual void start() = 0;
     virtual void stop()  = 0;
@@ -127,11 +124,17 @@ public:
 private:
     friend Result<ChildProcess> spawn(SpawnOptions opts);
 
-    NativePid   pid_{};
-    NativeHandle handle_{}; // Win32 HANDLE; unused on POSIX
+    NativePid    pid_{};
+    NativeHandle handle_{};  // Win32 HANDLE; unused on POSIX
     std::string  stdout_buf_;
     std::string  stderr_buf_;
-    // Platform-specific async reader state is implementation detail.
+
+    // POSIX: pipe read-ends for captured output; -1 = not open.
+    // Closed and drained inside wait().
+#if !defined(_WIN32)
+    int stdout_rd_ = -1;
+    int stderr_rd_ = -1;
+#endif
 };
 
 // ─── Spawn ───────────────────────────────────────────────────────────────────

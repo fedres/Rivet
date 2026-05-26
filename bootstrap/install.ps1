@@ -1,17 +1,18 @@
-# bootstrap/install.ps1 — One-line installer for Rivet on Windows
-# Usage: irm https://rivet.build/install.ps1 | iex
+# bootstrap/install.ps1 — Rivet one-line installer for Windows
+# Usage: irm https://releases.rivet.build/install.ps1 | iex
+#   Or:  $env:RIVET_VERSION="0.2.0"; irm https://releases.rivet.build/install.ps1 | iex
 
 [CmdletBinding()]
 param(
-    [string]$InstallDir = (Join-Path $env:USERPROFILE ".rivet\bin")
+    [string]$Version  = $env:RIVET_VERSION,
+    [string]$HomeDir  = ($env:RIVET_HOME ?? (Join-Path $env:USERPROFILE ".rivet")),
+    [string]$BaseUrl  = ($env:RIVET_BASE_URL ?? "https://github.com/fedres/Rivet/releases/download")
 )
 
 $ErrorActionPreference = "Stop"
+$ProgressPreference    = "SilentlyContinue"   # Invoke-WebRequest is 10x faster without progress
 
-$Repo = "https://github.com/fedres/Rivet"
-$Api  = "https://api.github.com/repos/fedres/Rivet/releases/latest"
-
-# ─── Detect architecture ─────────────────────────────────────────────────────
+# ─── Architecture detection ───────────────────────────────────────────────────
 
 $Arch = switch ($env:PROCESSOR_ARCHITECTURE) {
     "AMD64" { "x86_64" }
@@ -19,71 +20,91 @@ $Arch = switch ($env:PROCESSOR_ARCHITECTURE) {
     default { throw "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE" }
 }
 
-$Triple = "${Arch}-windows"
+$Triple = "windows-$Arch"
 
-# ─── Resolve latest tag ───────────────────────────────────────────────────────
+# ─── Version resolution ───────────────────────────────────────────────────────
 
-Write-Host "Fetching latest Rivet release..."
-$Release = Invoke-RestMethod -Uri $Api -Headers @{ "User-Agent" = "rivet-installer" }
-$Tag = $Release.tag_name
-
-if (-not $Tag) {
-    throw "Could not determine latest Rivet release."
+if (-not $Version) {
+    Write-Host "Fetching latest Rivet release..."
+    try {
+        $Release = Invoke-RestMethod `
+            -Uri "https://api.github.com/repos/fedres/Rivet/releases/latest" `
+            -Headers @{ "User-Agent" = "rivet-installer/1.0" }
+        $Version = $Release.tag_name
+    } catch {
+        throw "Could not determine latest Rivet version. Set `$env:RIVET_VERSION and retry."
+    }
 }
 
-$Archive = "rivet-${Tag}-${Triple}.zip"
-$Url     = "${Repo}/releases/download/${Tag}/${Archive}"
-$ShaUrl  = "${Url}.sha256"
-
-Write-Host "Installing Rivet ${Tag} (${Triple}) to ${InstallDir} ..."
-
-# ─── Create install dir ───────────────────────────────────────────────────────
-
-if (-not (Test-Path $InstallDir)) {
-    New-Item -ItemType Directory -Path $InstallDir | Out-Null
+if (-not $Version) {
+    throw "Could not determine latest Rivet version."
 }
+
+$BundleName = "rivet-$Version-$Triple"
+$Archive    = "$BundleName.zip"
+$BundleUrl  = "$BaseUrl/$Version/$Archive"
+$ShaUrl     = "$BundleUrl.sha256"
+
+Write-Host "Installing Rivet $Version ($Triple) → $HomeDir ..."
 
 # ─── Download ─────────────────────────────────────────────────────────────────
 
-$TmpDir  = Join-Path $env:TEMP "rivet_install"
+$TmpDir = Join-Path $env:TEMP "rivet_install_$([System.Guid]::NewGuid().ToString('N').Substring(0,8))"
 New-Item -ItemType Directory -Force -Path $TmpDir | Out-Null
-$ZipPath = Join-Path $TmpDir $Archive
-
-Write-Host "Downloading $Url ..."
-Invoke-WebRequest -Uri $Url -OutFile $ZipPath -UseBasicParsing
-
-# ─── Verify checksum (if available) ──────────────────────────────────────────
 
 try {
-    $ShaFile = Join-Path $TmpDir "${Archive}.sha256"
-    Invoke-WebRequest -Uri $ShaUrl -OutFile $ShaFile -UseBasicParsing -ErrorAction Stop
-    $Expected = (Get-Content $ShaFile -Raw).Trim().Split()[0].ToLower()
-    $Actual   = (Get-FileHash $ZipPath -Algorithm SHA256).Hash.ToLower()
-    if ($Expected -ne $Actual) {
-        throw "Checksum mismatch! Expected $Expected, got $Actual"
+    $ZipPath = Join-Path $TmpDir $Archive
+    Write-Host "Downloading $BundleUrl ..."
+    Invoke-WebRequest -Uri $BundleUrl -OutFile $ZipPath -UseBasicParsing
+
+    # ─── Checksum verification ────────────────────────────────────────────────
+
+    try {
+        $ShaFile = Join-Path $TmpDir "$Archive.sha256"
+        Invoke-WebRequest -Uri $ShaUrl -OutFile $ShaFile -UseBasicParsing -ErrorAction Stop
+        $Expected = ((Get-Content $ShaFile -Raw).Trim() -split '\s+')[0].ToLower()
+        $Actual   = (Get-FileHash $ZipPath -Algorithm SHA256).Hash.ToLower()
+        if ($Expected -ne $Actual) {
+            throw "Checksum mismatch!`n  Expected: $Expected`n  Actual:   $Actual`nThe download may be corrupt or tampered with."
+        }
+        Write-Host "Checksum verified."
+    } catch [System.Net.WebException] {
+        Write-Warning "Checksum file not available — skipping verification."
     }
-    Write-Host "Checksum verified."
-} catch {
-    Write-Warning "Could not verify checksum (skip): $_"
+
+    # ─── Extract ──────────────────────────────────────────────────────────────
+
+    New-Item -ItemType Directory -Force -Path $HomeDir | Out-Null
+    Expand-Archive -Path $ZipPath -DestinationPath $TmpDir -Force
+
+    # Bundle unpacks to a versioned subdir — move contents into $HomeDir.
+    $Extracted = Join-Path $TmpDir $BundleName
+    if (Test-Path $Extracted) {
+        Copy-Item -Recurse -Force "$Extracted\*" $HomeDir
+    } else {
+        # Fallback: bundle root is already the content.
+        Expand-Archive -Path $ZipPath -DestinationPath $HomeDir -Force
+    }
+
+    # ─── PATH update ─────────────────────────────────────────────────────────
+
+    $BinDir  = Join-Path $HomeDir "bin"
+    $UserPath = [Environment]::GetEnvironmentVariable("PATH", "User") ?? ""
+    $PathParts = $UserPath -split ";" | Where-Object { $_ -ne "" }
+
+    if ($BinDir -notin $PathParts) {
+        $NewPath = ($PathParts + $BinDir) -join ";"
+        [Environment]::SetEnvironmentVariable("PATH", $NewPath, "User")
+        Write-Host "Added $BinDir to user PATH."
+        Write-Host "Restart your terminal for the change to take effect."
+    }
+
+    # ─── Done ─────────────────────────────────────────────────────────────────
+
+    Write-Host ""
+    Write-Host "Rivet $Version installed to $HomeDir"
+    Write-Host "Run: rivet --version"
+
+} finally {
+    Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
 }
-
-# ─── Extract ──────────────────────────────────────────────────────────────────
-
-Expand-Archive -Path $ZipPath -DestinationPath $InstallDir -Force
-
-# ─── Add to user PATH ─────────────────────────────────────────────────────────
-
-$UserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-if (-not ($UserPath -split ";" | Where-Object { $_ -eq $InstallDir })) {
-    [Environment]::SetEnvironmentVariable("PATH", "$UserPath;$InstallDir", "User")
-    Write-Host "Added $InstallDir to your user PATH."
-    Write-Host "Restart your terminal for the change to take effect."
-}
-
-# ─── Cleanup ──────────────────────────────────────────────────────────────────
-
-Remove-Item -Recurse -Force $TmpDir
-
-Write-Host ""
-Write-Host "Rivet $Tag installed successfully!"
-Write-Host "Run 'rivet --version' to verify."

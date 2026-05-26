@@ -6,6 +6,8 @@
 #include "store.hpp"
 #include "../../platform/interface/fs.hpp"
 #include "../../platform/interface/time.hpp"
+#include "../../platform/interface/env.hpp"
+#include "../../platform/interface/net.hpp"
 
 #include <format>
 #include <cstring>
@@ -29,6 +31,7 @@ static int sqlite3_step(struct sqlite3_stmt*) { return 101; /*SQLITE_DONE*/ }
 static int sqlite3_bind_text(struct sqlite3_stmt*,int,const char*,int,void(*)(void*)){return 1;}
 static int sqlite3_bind_int64(struct sqlite3_stmt*,int,long long){return 1;}
 static int sqlite3_column_int64(struct sqlite3_stmt*,int){return 0;}
+static const unsigned char* sqlite3_column_text(struct sqlite3_stmt*,int){return nullptr;}
 static int sqlite3_column_count(struct sqlite3_stmt*){return 0;}
 static const char* sqlite3_errmsg(sqlite3*){return "sqlite not available";}
 static void sqlite3_free(void*){}
@@ -83,6 +86,9 @@ Result<Store> Store::open(const Path& cache_dir) {
         // Schema init failed — still usable but only for lookup failures.
         (void)r;
     }
+    // Automatically wire remote cache from environment.
+    if (auto u = rivet::env::get("RIVET_REMOTE_CACHE"))
+        store.remote_url_ = *u;
     return store;
 }
 
@@ -203,6 +209,69 @@ Result<void> Store::index_entry(const build::CacheKey& key,
     return {};
 }
 
+// ─── Remote cache ─────────────────────────────────────────────────────────────
+
+void Store::set_remote_url(std::string url) {
+    remote_url_ = std::move(url);
+}
+
+// Remote artifact URL: <base>/<hex[0:2]>/<hex>.zst
+static std::string remote_artifact_url(const std::string& base,
+                                        const build::CacheKey& key) {
+    return base + "/" + key.hex.substr(0, 2) + "/" + key.hex + ".zst";
+}
+
+Result<void> Store::fetch_remote(const build::CacheKey& key, const Path& dest) {
+    if (remote_url_.empty()) {
+        // Check env var once per call (lazy init for remote URL).
+        if (auto u = rivet::env::get("RIVET_REMOTE_CACHE"))
+            remote_url_ = *u;
+        if (remote_url_.empty())
+            return make_error<void>("remote cache not configured");
+    }
+
+    auto url_str = remote_artifact_url(remote_url_, key);
+    auto url_r   = rivet::net::Url::parse(url_str);
+    if (!url_r) return propagate<void>(url_r);
+
+    auto local = artifact_path(key);
+    RIVET_TRY(rivet::fs::create_dirs(local.parent_path()));
+
+    // Download straight to the local cache location.
+    auto dl = rivet::net::download_file(*url_r, local);
+    if (!dl) return propagate<void>(dl);
+
+    // Index locally.
+    auto stat = rivet::fs::stat(local);
+    int64_t sz = stat ? static_cast<int64_t>(stat->size_bytes) : 0;
+    (void)index_entry(key, local, sz);
+
+    // Copy to destination.
+    return rivet::fs::copy_file(local, dest);
+}
+
+void Store::push_remote(const build::CacheKey& key, const Path& artifact_path_local) {
+    if (remote_url_.empty()) {
+        if (auto u = rivet::env::get("RIVET_REMOTE_CACHE"))
+            remote_url_ = *u;
+        if (remote_url_.empty()) return;
+    }
+
+    auto data = rivet::fs::read_file(artifact_path_local);
+    if (!data) return;
+
+    auto url_str = remote_artifact_url(remote_url_, key);
+    auto url_r   = rivet::net::Url::parse(url_str);
+    if (!url_r) return;
+
+    rivet::net::HttpClient client{remote_url_};
+    // Best-effort PUT; silently ignore any error.
+    auto path_suffix = "/" + key.hex.substr(0, 2) + "/" + key.hex + ".zst";
+    (void)client.put(path_suffix,
+                     rivet::ByteSpan{data->data(), data->size()},
+                     "application/octet-stream");
+}
+
 // ─── stats() ─────────────────────────────────────────────────────────────────
 
 Result<StoreStats> Store::stats() const {
@@ -233,13 +302,20 @@ Result<std::size_t> Store::evict_older_than(int64_t max_age_sec) {
 
     sqlite3_bind_int64(stmt, 1, cutoff);
 
+    std::vector<std::string> paths;
     std::size_t count = 0;
     while (sqlite3_step(stmt) == 100 /*SQLITE_ROW*/) {
+        if (auto* p = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)))
+            paths.emplace_back(p);
         ++count;
-        // NOTE: actual file deletion deferred to trim_to for batch efficiency.
     }
     sqlite3_finalize(stmt);
 
+    // Delete artifact files from disk.
+    for (const auto& path : paths)
+        (void)rivet::fs::remove_file(Path{path});
+
+    // Remove DB rows.
     const char* del = "DELETE FROM cache_entries WHERE last_hit < ?";
     sqlite3_stmt* del_stmt = nullptr;
     if (sqlite3_prepare_v2(db_, del, -1, &del_stmt, nullptr) == 0) {
@@ -258,20 +334,36 @@ Result<std::size_t> Store::trim_to(int64_t max_bytes) {
     auto s = stats();
     if (!s || s->total_bytes <= max_bytes) return 0u;
 
-    // Evict LRU entries until we're under budget.
-    const char* sql = "SELECT key, artifact, size_bytes FROM cache_entries ORDER BY last_hit ASC";
+    // Collect LRU entries until we'd be under budget, then delete them.
+    const char* sql =
+        "SELECT key, artifact, size_bytes FROM cache_entries ORDER BY last_hit ASC";
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != 0) return 0u;
 
     int64_t running = s->total_bytes;
-    std::size_t evicted = 0;
+    std::vector<std::pair<std::string, std::string>> to_evict;  // (key, artifact)
 
-    while (sqlite3_step(stmt) == 100 && running > max_bytes) {
-        // TODO: delete the actual file from disk.
+    while (sqlite3_step(stmt) == 100 /*SQLITE_ROW*/ && running > max_bytes) {
+        auto* key  = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        auto* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        if (key && path) to_evict.emplace_back(key, path);
         running -= sqlite3_column_int64(stmt, 2);
-        ++evicted;
     }
     sqlite3_finalize(stmt);
+
+    std::size_t evicted = 0;
+    for (const auto& [key, path] : to_evict) {
+        (void)rivet::fs::remove_file(Path{path});
+
+        const char* del = "DELETE FROM cache_entries WHERE key=?";
+        sqlite3_stmt* del_stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, del, -1, &del_stmt, nullptr) == 0) {
+            sqlite3_bind_text(del_stmt, 1, key.c_str(), -1, nullptr);
+            sqlite3_step(del_stmt);
+            sqlite3_finalize(del_stmt);
+        }
+        ++evicted;
+    }
     return evicted;
 }
 

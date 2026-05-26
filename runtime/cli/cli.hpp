@@ -31,6 +31,8 @@ int cmd_publish(const Context& ctx);
 int cmd_cache(const Context& ctx);
 int cmd_daemon(const Context& ctx);
 int cmd_toolchain(const Context& ctx);
+int cmd_fuzz(const Context& ctx);
+int cmd_self_update(const Context& ctx);
 int cmd_version(const Context& ctx);
 int cmd_help(const Context& ctx);
 

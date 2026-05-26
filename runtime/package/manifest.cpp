@@ -157,6 +157,54 @@ Result<Manifest> parse_manifest(const Path& path) {
     else                              m.build.system = BuildSystem::Rivet;
 
     m.build.cxx_std = detail::get(flat, "build.cxx_std", "c++23");
+
+    // [dependencies]
+    for (const auto& [k, v] : flat) {
+        const std::string prefix = "dependencies.";
+        if (k.size() > prefix.size() && k.compare(0, prefix.size(), prefix) == 0) {
+            std::string dep_name = k.substr(prefix.size());
+            rivet::pkg::DepSpec spec;
+            spec.kind    = rivet::pkg::DepKind::Registry;
+            spec.version = v;
+            m.dependencies[dep_name] = std::move(spec);
+        }
+    }
+
+    // [profiles.<name>] — e.g. [profiles.asan]
+    for (const auto& [k, v] : flat) {
+        const std::string prefix = "profiles.";
+        if (k.size() <= prefix.size() || k.compare(0, prefix.size(), prefix) != 0) continue;
+        std::string rest = k.substr(prefix.size());
+        auto dot = rest.find('.');
+        if (dot == std::string::npos) continue;
+        std::string prof_name  = rest.substr(0, dot);
+        std::string field_name = rest.substr(dot + 1);
+
+        auto& prof = m.profiles[prof_name];
+        prof.name  = prof_name;
+
+        if (field_name == "opt_level") {
+            try { prof.opt_level = std::stoi(v); } catch (...) {}
+        } else if (field_name == "debug") {
+            prof.debug = (v == "true");
+        } else if (field_name == "lto") {
+            prof.lto = (v == "true");
+        } else if (field_name == "sanitizers") {
+            // Parse inline TOML array: ["address", "undefined"]
+            std::string arr = v;
+            if (!arr.empty() && arr.front() == '[') arr.erase(arr.begin());
+            if (!arr.empty() && arr.back()  == ']') arr.pop_back();
+            std::istringstream arr_ss(arr);
+            std::string item;
+            while (std::getline(arr_ss, item, ',')) {
+                while (!item.empty() && std::isspace(static_cast<unsigned char>(item.front()))) item.erase(item.begin());
+                while (!item.empty() && std::isspace(static_cast<unsigned char>(item.back())))  item.pop_back();
+                if (item.size() >= 2 && item.front() == '"' && item.back() == '"')
+                    item = item.substr(1, item.size() - 2);
+                if (!item.empty()) prof.sanitizers.push_back(item);
+            }
+        }
+    }
     return m;
 #endif
 }

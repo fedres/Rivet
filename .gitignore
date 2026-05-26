@@ -1,5 +1,6 @@
-# Build outputs
-build/
+# Build outputs (leading / = root-level only; does NOT ignore runtime/build/ source dir)
+/build/
+/build_debug/
 out/
 cmake-build-*/
 .ninja_deps

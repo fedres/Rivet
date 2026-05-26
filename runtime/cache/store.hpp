@@ -67,6 +67,17 @@ public:
     /// The source file is compressed (zstd) and written atomically.
     [[nodiscard]] Result<void> put(const build::CacheKey& key, const Path& source);
 
+    // ─── Remote cache ──────────────────────────────────────────────────────────
+    // URL is read from the RIVET_REMOTE_CACHE env var on open(), or set here.
+
+    void set_remote_url(std::string url);
+
+    /// Try to fetch artifact from remote cache; on success also stores it locally.
+    [[nodiscard]] Result<void> fetch_remote(const build::CacheKey& key, const Path& dest);
+
+    /// Upload artifact to remote cache (best-effort; never propagates errors).
+    void push_remote(const build::CacheKey& key, const Path& artifact_path);
+
     // ─── Maintenance ───────────────────────────────────────────────────────
 
     [[nodiscard]] Result<StoreStats> stats() const;
@@ -80,8 +91,9 @@ public:
 private:
     explicit Store(Path cache_dir, sqlite3* db);
 
-    Path     cache_dir_;
-    sqlite3* db_ = nullptr;
+    Path        cache_dir_;
+    sqlite3*    db_         = nullptr;
+    std::string remote_url_;        // empty = remote cache disabled
 
     [[nodiscard]] Path artifact_path(const build::CacheKey& key) const;
     [[nodiscard]] Result<void> init_schema();

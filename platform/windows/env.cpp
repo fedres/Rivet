@@ -114,4 +114,25 @@ std::string host_triple() {
     }
 }
 
+std::optional<Path> windows_sdk_dir() {
+    // Read HKLM\SOFTWARE\Microsoft\Windows Kits\Installed Roots\KitsRoot10
+    static const WCHAR kRegKey[] =
+        L"SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots";
+    static const WCHAR kValue[] = L"KitsRoot10";
+
+    HKEY hkey = nullptr;
+    if (::RegOpenKeyExW(HKEY_LOCAL_MACHINE, kRegKey, 0, KEY_READ, &hkey) != ERROR_SUCCESS)
+        return std::nullopt;
+
+    wchar_t buf[MAX_PATH]{};
+    DWORD type = 0;
+    DWORD sz   = sizeof(buf);
+    LSTATUS rc = ::RegQueryValueExW(hkey, kValue, nullptr, &type,
+                                    reinterpret_cast<LPBYTE>(buf), &sz);
+    ::RegCloseKey(hkey);
+
+    if (rc != ERROR_SUCCESS || type != REG_SZ) return std::nullopt;
+    return Path{wide_to_utf8(buf)};
+}
+
 } // namespace rivet::env
