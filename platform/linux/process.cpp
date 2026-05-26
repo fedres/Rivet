@@ -19,6 +19,40 @@ extern char** environ;
 
 namespace rivet::process {
 
+namespace {
+
+// Resolve a bare executable name against PATH so callers can pass "tar"
+// instead of "/usr/bin/tar". We do this in the parent before fork() so we
+// can use std::string safely (post-fork pre-exec is async-signal-safe only).
+// If `argv[0]` already contains a '/', it's returned verbatim; otherwise we
+// walk the PATH that the child will see (env-overrides win over `environ`).
+std::string resolve_via_path(const std::string& name,
+                             const std::vector<std::string>& envp_strs) {
+    if (name.find('/') != std::string::npos) return name;
+    std::string_view path;
+    for (const auto& e : envp_strs) {
+        if (e.starts_with("PATH=")) { path = std::string_view(e).substr(5); break; }
+    }
+    if (path.empty()) {
+        if (const char* p = std::getenv("PATH")) path = p;
+    }
+    if (path.empty()) return name;
+    size_t start = 0;
+    while (start <= path.size()) {
+        size_t end = path.find(':', start);
+        size_t len = (end == std::string_view::npos ? path.size() : end) - start;
+        std::string candidate;
+        if (len == 0) candidate = name;
+        else { candidate.assign(path.data() + start, len); candidate += '/'; candidate += name; }
+        if (::access(candidate.c_str(), X_OK) == 0) return candidate;
+        if (end == std::string_view::npos) break;
+        start = end + 1;
+    }
+    return name;  // not found — let execve fail with ENOENT
+}
+
+} // namespace
+
 // ─── CancellationToken ────────────────────────────────────────────────────────
 
 struct CancellationToken::Impl {
@@ -176,6 +210,9 @@ Result<ChildProcess> spawn(SpawnOptions opts) {
     for (auto& e : env_strs) envp.push_back(const_cast<char*>(e.c_str()));
     envp.push_back(nullptr);
 
+    // Resolve PATH before fork (std::string is not async-signal-safe).
+    std::string resolved_exe = resolve_via_path(opts.args[0], env_strs);
+
     int stdout_pipe[2] = {-1, -1};
     int stderr_pipe[2] = {-1, -1};
 
@@ -214,7 +251,7 @@ Result<ChildProcess> spawn(SpawnOptions opts) {
         }
         ::setpgid(0, 0);
         if (opts.working_dir) ::chdir(opts.working_dir->c_str());
-        ::execve(argv[0], argv.data(), envp.data());
+        ::execve(resolved_exe.c_str(), argv.data(), envp.data());
         ::_exit(127);
     }
 
