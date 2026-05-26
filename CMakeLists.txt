@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.25)
 project(rivet
     VERSION 0.1.0
     DESCRIPTION "A self-contained, cross-platform C++ build system and runtime"
-    LANGUAGES CXX
+    LANGUAGES CXX C
 )
 
 # ─── Global settings ──────────────────────────────────────────────────────────
