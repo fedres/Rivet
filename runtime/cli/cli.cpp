@@ -54,7 +54,7 @@ static void print_usage() {
         "  run         Build and run the project binary\n"
         "  add         Add a dependency\n"
         "  remove      Remove a dependency\n"
-        "  fetch       Fetch + build all locked dependencies via their sources\n"
+        "  fetch       Fetch + build all locked deps (--locked/--frozen for CI)\n"
         "  new         Create a new project from a template\n"
         "  publish     Publish a package to the registry\n"
         "  cache       Manage the local build cache\n"
@@ -767,8 +767,18 @@ int cmd_add(const Context& ctx) {
 // Materialize every locked dependency on disk via its source backend.
 // For vcpkg deps this triggers `vcpkg install` with the bundled-clang triplet;
 // for git/local deps it's just a clone/copy. Idempotent.
+//
+// Flags:
+//   --locked   use rivet.lock as authoritative; error if a dep is missing
+//              from it (cargo-style "lockfile must satisfy manifest").
+//   --frozen   --locked + no network access (no vcpkg clone, no git fetch).
+//              Intended for CI: forbid any drift, fail loud.
 
-int cmd_fetch(const Context& /*ctx*/) {
+int cmd_fetch(const Context& ctx) {
+    auto args = ctx.args_after_subcommand();
+    bool locked = has_flag(args, "--locked") || has_flag(args, "--frozen");
+    bool frozen = has_flag(args, "--frozen");
+
     auto cwd_opt = rivet::env::get("PWD");
     Path cwd = cwd_opt ? Path{*cwd_opt} : Path{"."};
     auto manifest_r = rivet::pkg::find_and_parse(cwd);
@@ -786,9 +796,24 @@ int cmd_fetch(const Context& /*ctx*/) {
     auto home_r = rivet::env::rivet_home();
     Path rivet_home_path = home_r ? *home_r : Path{".rivet"};
     auto registry = rivet::pkg::make_default_registry(rivet_home_path);
-    rivet::pkg::Resolver resolver{registry};
+    rivet::pkg::ResolverOptions opts;
+    opts.locked = locked;
+    opts.frozen = frozen;
+    rivet::pkg::Resolver resolver{registry, opts};
 
-    auto lock = resolver.resolve(manifest);
+    rivet::Result<rivet::pkg::LockFile> lock;
+    Path lockfile_path = manifest.root_dir / "rivet.lock";
+    if (locked) {
+        auto existing = rivet::pkg::parse_lockfile(lockfile_path);
+        if (!existing) {
+            std::cerr << "error: --locked/--frozen requires an existing rivet.lock: "
+                      << existing.error().message << "\n";
+            return 1;
+        }
+        lock = resolver.resolve_locked(manifest, *existing);
+    } else {
+        lock = resolver.resolve(manifest);
+    }
     if (!lock) {
         std::cerr << "error: " << lock.error().message << "\n";
         return 1;

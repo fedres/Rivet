@@ -116,6 +116,84 @@ TEST_F(ResolverTest, DeduplicatesSharedDep) {
     EXPECT_EQ(lf->packages[0].name, "leaf");
 }
 
+// ─── resolve_locked() — --frozen / --locked path ─────────────────────────────
+
+TEST_F(ResolverTest, ResolveLockedReturnsExistingEntries) {
+    auto leaf = make_pkg("leaf", "1.2.3");
+
+    Manifest root;
+    root.name = "root"; root.version = "0.1.0";
+    DepSpec spec;
+    spec.kind       = DepKind::Path;
+    spec.local_path = leaf;
+    spec.version    = "*";
+    root.dependencies["leaf"] = spec;
+
+    LockFile existing;
+    existing.root_name    = "root";
+    existing.root_version = "0.1.0";
+    LockedDep d;
+    d.name = "leaf"; d.version = "1.2.3"; d.source = "path";
+    d.local_path = leaf;
+    existing.packages.push_back(d);
+
+    SourceRegistry reg;
+    reg.add(std::make_unique<LocalSource>());
+    Resolver r{reg};
+
+    auto out = r.resolve_locked(root, existing);
+    ASSERT_TRUE(out.has_value()) << out.error().message;
+    ASSERT_EQ(out->packages.size(), 1u);
+    EXPECT_EQ(out->packages[0].version, "1.2.3");
+}
+
+TEST_F(ResolverTest, ResolveLockedFailsOnMissingDep) {
+    Manifest root;
+    root.name = "root"; root.version = "0.1.0";
+    DepSpec spec;
+    spec.kind       = DepKind::Path;
+    spec.local_path = tmp_dir / "ghost";
+    spec.version    = "*";
+    root.dependencies["ghost"] = spec;
+
+    LockFile existing;
+    existing.root_name = "root"; existing.root_version = "0.1.0";
+    // Note: NO entry for "ghost".
+
+    SourceRegistry reg;
+    reg.add(std::make_unique<LocalSource>());
+    Resolver r{reg};
+
+    auto out = r.resolve_locked(root, existing);
+    EXPECT_FALSE(out.has_value());
+}
+
+TEST_F(ResolverTest, ResolveLockedFailsOnVersionDrift) {
+    auto leaf = make_pkg("leaf", "1.0.0");
+
+    Manifest root;
+    root.name = "root"; root.version = "0.1.0";
+    DepSpec spec;
+    spec.kind       = DepKind::Path;
+    spec.local_path = leaf;
+    spec.version    = "^2.0";   // requires major 2
+    root.dependencies["leaf"] = spec;
+
+    LockFile existing;
+    existing.root_name = "root"; existing.root_version = "0.1.0";
+    LockedDep d;
+    d.name = "leaf"; d.version = "1.0.0"; d.source = "path";
+    d.local_path = leaf;
+    existing.packages.push_back(d);
+
+    SourceRegistry reg;
+    reg.add(std::make_unique<LocalSource>());
+    Resolver r{reg};
+
+    auto out = r.resolve_locked(root, existing);
+    EXPECT_FALSE(out.has_value());
+}
+
 TEST_F(ResolverTest, ErrorsOnUnresolvableDep) {
     Manifest root;
     root.name = "root";

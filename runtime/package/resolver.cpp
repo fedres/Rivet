@@ -65,6 +65,72 @@ LockedDep to_locked(const ResolvedPackage& pkg) {
 
 } // namespace
 
+Result<LockFile> Resolver::resolve_locked(const Manifest& root,
+                                          const LockFile& existing) {
+    // Walk the manifest. Every direct dep must already appear in `existing`;
+    // we surface the lockfile entries verbatim plus all their transitive
+    // packages. No source resolution is performed — entirely local op.
+    std::unordered_set<std::string> reachable;
+    std::vector<std::string>        worklist;
+
+    auto in_lock = [&](std::string_view name) -> const LockedDep* {
+        for (const auto& d : existing.packages)
+            if (d.name == name) return &d;
+        return nullptr;
+    };
+
+    // Seed with direct deps (the manifest is the contract).
+    for (const auto& [name, spec] : root.dependencies) {
+        auto* d = in_lock(name);
+        if (!d)
+            return make_error<LockFile>(std::format(
+                "locked: rivet.lock is missing '{}' (declared in rivet.toml). "
+                "Re-run `rivet add` or remove the --frozen/--locked flag.", name));
+        // Drift check: manifest spec must be compatible with the locked
+        // version. Bare equality is the strongest signal; for general
+        // constraints we re-use the SemVer matcher.
+        if (!spec.version.empty() && spec.version != "*") {
+            if (auto v = parse_semver(d->version);
+                    v && !satisfies(spec.version, *v))
+                return make_error<LockFile>(std::format(
+                    "locked: '{}' {} does not satisfy manifest constraint '{}'. "
+                    "Lockfile drift — re-run resolution without --frozen/--locked.",
+                    name, d->version, spec.version));
+        }
+        if (reachable.insert(name).second)
+            worklist.push_back(name);
+    }
+    if (opts_.include_dev) {
+        for (const auto& [name, spec] : root.dev_dependencies) {
+            (void)spec;
+            if (auto* d = in_lock(name); d && reachable.insert(name).second)
+                worklist.push_back(name);
+        }
+    }
+
+    // Transitive closure within the lockfile itself.
+    while (!worklist.empty()) {
+        std::string cur = std::move(worklist.back());
+        worklist.pop_back();
+        auto* d = in_lock(cur);
+        if (!d) continue;
+        for (const auto& dep_name : d->deps) {
+            // deps are stored as bare names in our lockfile format.
+            if (reachable.insert(dep_name).second)
+                worklist.push_back(dep_name);
+        }
+    }
+
+    LockFile out;
+    out.format_version = existing.format_version;
+    out.root_name      = root.name;
+    out.root_version   = root.version;
+    for (const auto& d : existing.packages)
+        if (reachable.count(d.name)) out.packages.push_back(d);
+    std::sort(out.packages.begin(), out.packages.end(), dep_less);
+    return out;
+}
+
 Result<LockFile> Resolver::resolve(const Manifest& root) {
     LockFile lf;
     lf.format_version = 1;
