@@ -268,8 +268,8 @@ Path relative_to(const Path& p, const Path& base) {
     return rel.empty() ? p : rel;
 }
 
-Path temp_path_near(const Path& near) {
-    return near.parent_path() / (near.filename().string() + ".rivet_tmp");
+Path temp_path_near(const Path& p) {
+    return p.parent_path() / (p.filename().string() + ".rivet_tmp");
 }
 
 } // namespace rivet::fs

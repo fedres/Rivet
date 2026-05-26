@@ -132,6 +132,6 @@ public:
 
 // Return a unique temp path in the same directory as near,
 // suitable for atomic write-then-rename patterns.
-[[nodiscard]] Path temp_path_near(const Path& near);
+[[nodiscard]] Path temp_path_near(const Path& p);
 
 } // namespace rivet::fs
