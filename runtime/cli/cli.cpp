@@ -726,7 +726,7 @@ int cmd_new(const Context& ctx) {
     };
 
     std::string toml = rivet::pkg::serialize(manifest);
-    rivet::fs::write_atomic(project_dir / "rivet.toml", str_bytes(toml));
+    (void)rivet::fs::write_atomic(project_dir / "rivet.toml", str_bytes(toml));
 
     // src/main.cpp
     std::string main_cpp = std::format(
@@ -735,11 +735,11 @@ int cmd_new(const Context& ctx) {
         "int main() {{\n"
         "    std::println(\"Hello from {}!\");\n"
         "}}\n", name, name);
-    rivet::fs::write_atomic(src_dir / "main.cpp", str_bytes(main_cpp));
+    (void)rivet::fs::write_atomic(src_dir / "main.cpp", str_bytes(main_cpp));
 
     // .gitignore
     std::string gitignore = ".rivet/\nbuild/\n*.o\n*.a\n";
-    rivet::fs::write_atomic(project_dir / ".gitignore", str_bytes(gitignore));
+    (void)rivet::fs::write_atomic(project_dir / ".gitignore", str_bytes(gitignore));
 
     std::cout << std::format("  Created {} project '{}'\n", tmpl, name);
     std::cout << std::format("\n  To get started:\n    cd {}\n    rivet build\n", name);

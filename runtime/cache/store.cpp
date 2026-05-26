@@ -32,7 +32,6 @@ static int sqlite3_bind_text(struct sqlite3_stmt*,int,const char*,int,void(*)(vo
 static int sqlite3_bind_int64(struct sqlite3_stmt*,int,long long){return 1;}
 static int sqlite3_column_int64(struct sqlite3_stmt*,int){return 0;}
 static const unsigned char* sqlite3_column_text(struct sqlite3_stmt*,int){return nullptr;}
-static int sqlite3_column_count(struct sqlite3_stmt*){return 0;}
 static const char* sqlite3_errmsg(sqlite3*){return "sqlite not available";}
 static void sqlite3_free(void*){}
 struct sqlite3_stmt {};
