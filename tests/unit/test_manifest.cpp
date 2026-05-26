@@ -143,7 +143,7 @@ TEST_F(ManifestTest, LockfileResolveNoDeps) {
 }
 
 TEST_F(ManifestTest, LockfileWriteAndRead) {
-    LockFile lf;
+    rivet::pkg::LockFile lf;
     lf.root_name    = "myapp";
     lf.root_version = "1.0.0";
 

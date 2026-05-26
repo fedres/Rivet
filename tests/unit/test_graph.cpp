@@ -48,8 +48,8 @@ TEST(BuildGraph, TopoSortLinear) {
     TaskId a = g.add(phony("a"));
     TaskId b = g.add(phony("b"));
     TaskId c = g.add(phony("c"));
-    g.add_dep(a, b);
-    g.add_dep(b, c);
+    (void)g.add_dep(a, b);
+    (void)g.add_dep(b, c);
 
     auto order = g.topo_sort();
     ASSERT_TRUE(order.has_value()) << order.error().message;
@@ -69,8 +69,8 @@ TEST(BuildGraph, TopoSortCycleDetected) {
     BuildGraph g;
     TaskId a = g.add(phony("a"));
     TaskId b = g.add(phony("b"));
-    g.add_dep(a, b);
-    g.add_dep(b, a);   // cycle!
+    (void)g.add_dep(a, b);
+    (void)g.add_dep(b, a);   // cycle!
 
     auto order = g.topo_sort();
     EXPECT_FALSE(order.has_value());
@@ -89,10 +89,10 @@ TEST(BuildGraph, TopoSortDiamondDAG) {
     TaskId right = g.add(phony("right"));
     TaskId sink  = g.add(phony("sink"));
 
-    g.add_dep(root, left);
-    g.add_dep(root, right);
-    g.add_dep(left, sink);
-    g.add_dep(right, sink);
+    (void)g.add_dep(root, left);
+    (void)g.add_dep(root, right);
+    (void)g.add_dep(left, sink);
+    (void)g.add_dep(right, sink);
 
     auto order = g.topo_sort();
     ASSERT_TRUE(order.has_value()) << order.error().message;
@@ -118,8 +118,8 @@ TEST(BuildGraph, CriticalPathLinear) {
     TaskId a = g.add(phony("a"));
     TaskId b = g.add(phony("b"));
     TaskId c = g.add(phony("c"));
-    g.add_dep(a, b);
-    g.add_dep(b, c);
+    (void)g.add_dep(a, b);
+    (void)g.add_dep(b, c);
 
     auto w = g.critical_path_weights();
     EXPECT_GT(w[a], w[b]);
@@ -131,8 +131,8 @@ TEST(BuildGraph, CriticalPathLinear) {
 
 TEST(BuildGraph, ReadyTasksNoDeps) {
     BuildGraph g;
-    TaskId a = g.add(phony("a"));
-    TaskId b = g.add(phony("b"));
+    (void)g.add(phony("a"));
+    (void)g.add(phony("b"));
     // No deps: both are immediately ready.
     auto ready = g.ready_tasks();
     EXPECT_EQ(ready.size(), 2u);
@@ -142,7 +142,7 @@ TEST(BuildGraph, ReadyTasksWithDeps) {
     BuildGraph g;
     TaskId a = g.add(phony("a"));
     TaskId b = g.add(phony("b"));
-    g.add_dep(a, b);
+    (void)g.add_dep(a, b);
     // Only a is ready (b needs a to be Done first).
     auto ready = g.ready_tasks();
     ASSERT_EQ(ready.size(), 1u);
@@ -156,8 +156,8 @@ TEST(BuildGraph, DependentsTransitive) {
     TaskId a = g.add(phony("a"));
     TaskId b = g.add(phony("b"));
     TaskId c = g.add(phony("c"));
-    g.add_dep(a, b);
-    g.add_dep(b, c);
+    (void)g.add_dep(a, b);
+    (void)g.add_dep(b, c);
 
     auto deps = g.dependents_of(a);
     ASSERT_EQ(deps.size(), 2u);
@@ -169,7 +169,7 @@ TEST(Scheduler, PlanLinear) {
     BuildGraph g;
     TaskId a = g.add(phony("a"));
     TaskId b = g.add(phony("b"));
-    g.add_dep(a, b);
+    (void)g.add_dep(a, b);
 
     Scheduler sched{g, 4};
     auto plan = sched.plan();
@@ -185,7 +185,7 @@ TEST(Scheduler, PlanLinear) {
 TEST(Scheduler, PlanParallelism) {
     // All independent: should be one wave.
     BuildGraph g;
-    for (int i = 0; i < 5; ++i) g.add(phony("task" + std::to_string(i)));
+    for (int i = 0; i < 5; ++i) (void)g.add(phony("task" + std::to_string(i)));
 
     Scheduler sched{g, 8};
     auto plan = sched.plan();
