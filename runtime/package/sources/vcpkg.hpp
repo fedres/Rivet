@@ -19,6 +19,11 @@
 
 namespace rivet::pkg {
 
+// Compute the overlay-triplet name vcpkg uses for the *host* (the only
+// supported target at the moment). E.g. "x64-linux-rivet". Public so the
+// build engine can find the artifact tree at <install_root>/<triplet>/.
+[[nodiscard]] std::string host_vcpkg_triplet();
+
 struct VcpkgConfig {
     // Local clone of microsoft/vcpkg. Created on first use.
     Path vcpkg_root;

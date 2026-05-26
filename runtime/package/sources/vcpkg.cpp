@@ -36,6 +36,13 @@ constexpr const char* kHostTriple = "arm64-linux-gnu";
 #else
 constexpr const char* kHostTriple = "x86_64-linux-gnu";
 #endif
+} // namespace
+
+std::string host_vcpkg_triplet() {
+    return std::format("{}-rivet", vcpkg_triplet_base(kHostTriple));
+}
+
+namespace {
 
 Result<void> write_text(const Path& dst, std::string_view text) {
     rivet::ByteSpan span{
@@ -294,8 +301,7 @@ Result<PortRecipe> VcpkgSource::fetch(const ResolvedPackage& pkg, const Path& ca
     auto cli = ensure_vcpkg_cli(*root);
     if (!cli) return propagate<PortRecipe>(cli);
 
-    std::string triplet_name = std::format("{}-rivet",
-        vcpkg_triplet_base(kHostTriple));
+    std::string triplet_name = host_vcpkg_triplet();
     auto overlay = write_overlay_triplet(*root, triplet_name, kHostTriple, *tc);
     if (!overlay) return propagate<PortRecipe>(overlay);
 

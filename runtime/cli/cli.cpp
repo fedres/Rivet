@@ -14,6 +14,7 @@
 #include "../package/lockfile.hpp"
 #include "../package/default_sources.hpp"
 #include "../package/resolver.hpp"
+#include "../package/sources/vcpkg.hpp"
 #include "../toolchain/discovery.hpp"
 #include "../toolchain/compile.hpp"
 #include "../daemon/daemon.hpp"
@@ -250,6 +251,48 @@ int cmd_build(const Context& ctx) {
         cfg.sanitizers = {"undefined"};
     }
 
+    // 3b. Wire fetched dependencies. After `rivet fetch` the per-triplet
+    // install tree sits under <rivet_home>/cache/deps/<root>/vcpkg-installed/
+    // <triplet>/{include,lib}. We unconditionally add those paths so the
+    // compile/link steps can pick up vcpkg-installed libraries.
+    struct InstalledDeps {
+        std::vector<Path> include_dirs;
+        std::vector<Path> lib_dirs;
+        std::vector<Path> link_libs;
+    };
+    auto installed_deps = [&]() -> InstalledDeps {
+        InstalledDeps deps;
+        if (manifest.dependencies.empty()) return deps;
+        auto home_r = rivet::env::rivet_home();
+        if (!home_r) return deps;
+        Path install_root = *home_r / "cache" / "deps" / manifest.name
+                            / "vcpkg-installed" / rivet::pkg::host_vcpkg_triplet();
+        Path include_dir  = install_root / "include";
+        Path lib_dir      = install_root / "lib";
+        if (rivet::fs::exists(include_dir).value_or(false))
+            deps.include_dirs.push_back(include_dir);
+        if (rivet::fs::exists(lib_dir).value_or(false)) {
+            deps.lib_dirs.push_back(lib_dir);
+            if (auto entries = rivet::fs::list_dir(lib_dir)) {
+                for (const auto& e : *entries) {
+                    auto ext = e.extension().string();
+                    if (ext == ".a" || ext == ".so" || ext == ".dylib" || ext == ".lib")
+                        deps.link_libs.push_back(e);
+                }
+            }
+        }
+        return deps;
+    }();
+
+    for (const auto& d : installed_deps.include_dirs)
+        cfg.include_paths.push_back(d);
+
+    if (!installed_deps.include_dirs.empty()) {
+        std::cout << std::format("Using {} dep include dir(s); {} link lib(s)\n",
+            installed_deps.include_dirs.size(),
+            installed_deps.link_libs.size());
+    }
+
     std::cout << std::format("Building {} {} [{}] with clang {}\n",
         manifest.name, manifest.version, profile_name, tc.version);
 
@@ -337,6 +380,8 @@ int cmd_build(const Context& ctx) {
     lj.target_triple = cfg.target_triple;
     lj.lto           = cfg.lto;
     lj.sanitizers    = cfg.sanitizers;
+    for (const auto& p : installed_deps.lib_dirs)  lj.lib_search_paths.push_back(p.string());
+    for (const auto& l : installed_deps.link_libs) lj.link_libs.push_back(l);
 
     auto link_cmd_r = rivet::toolchain::make_link_command(lj, tc);
     if (!link_cmd_r) {

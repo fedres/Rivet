@@ -104,7 +104,7 @@ try {
     # skip; $env:RIVET_LLVM_VERSION overrides the default version.
 
     if ($env:RIVET_SKIP_TOOLCHAIN -ne "1") {
-        $LlvmVersion = if ($env:RIVET_LLVM_VERSION) { $env:RIVET_LLVM_VERSION } else { "18.1.8" }
+        $LlvmVersion = if ($env:RIVET_LLVM_VERSION) { $env:RIVET_LLVM_VERSION } else { "19.1.7" }
         $RivetExe    = Join-Path $BinDir "rivet.exe"
         # Detect a pre-existing toolchain to avoid re-downloading on re-runs.
         $HasToolchain = $false

@@ -36,14 +36,14 @@ automatically on download.
 ## How the CLI consumes them
 
 ```sh
-rivet toolchain install 18.1.8
+rivet toolchain install 19.1.7
 ```
 
 resolves to:
 
 ```
-https://github.com/fedres/Rivet/releases/download/toolchain-18.1.8/
-    rivet-toolchain-clang-18.1.8-<triple>.tar.zst
+https://github.com/fedres/Rivet/releases/download/toolchain-19.1.7/
+    rivet-toolchain-clang-19.1.7-<triple>.tar.zst
 ```
 
 Override the host with `RIVET_TOOLCHAIN_BASE_URL` for air-gapped
@@ -51,7 +51,7 @@ environments or private mirrors:
 
 ```sh
 RIVET_TOOLCHAIN_BASE_URL=https://artifacts.acme.corp/rivet \
-    rivet toolchain install 18.1.8
+    rivet toolchain install 19.1.7
 ```
 
 ## Auto-bootstrap during install
@@ -72,14 +72,14 @@ it now also fetches a toolchain on first install. Override:
 
 ## Picking a default LLVM version
 
-The install scripts default to `RIVET_LLVM_VERSION=18.1.8`. To change
+The install scripts default to `RIVET_LLVM_VERSION=19.1.7`. To change
 the default for new installs:
 
 1. Pick a version with full platform coverage (most recent LLVM releases
    ship Linux X64/ARM64, macOS ARM64, and Windows X64 prebuilts).
 2. Dispatch the workflow above to publish bundles for that version.
 3. Update `bootstrap/install.sh` and `bootstrap/install.ps1`:
-   change `DEFAULT_LLVM_VERSION="18.1.8"` (and the PowerShell equivalent).
+   change `DEFAULT_LLVM_VERSION="19.1.7"` (and the PowerShell equivalent).
 
 ## Why we don't compile LLVM ourselves
 

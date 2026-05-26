@@ -175,7 +175,7 @@ esac
 # version we'd otherwise install by default.
 
 if [ "${RIVET_SKIP_TOOLCHAIN:-0}" = "0" ]; then
-    DEFAULT_LLVM_VERSION="${RIVET_LLVM_VERSION:-18.1.8}"
+    DEFAULT_LLVM_VERSION="${RIVET_LLVM_VERSION:-19.1.7}"
     if "$RIVET_HOME/bin/rivet" toolchain list 2>/dev/null | grep -q 'clang-'; then
         echo ""
         echo "Toolchain already installed — skipping bootstrap."
