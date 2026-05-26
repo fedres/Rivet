@@ -72,9 +72,21 @@ Result<Path> canonical(const Path& p) {
 }
 
 Result<Path> read_symlink(const Path& p) {
-    // TODO: use DeviceIoControl / FSCTL_GET_REPARSE_POINT
-    (void)p;
-    return make_error<Path>("read_symlink: not yet implemented");
+    HANDLE h = ::CreateFileW(
+        to_wide(p).c_str(), 0,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+        return make_error<Path>("read_symlink: CreateFileW");
+    wchar_t buf[32768]{};
+    DWORD n = ::GetFinalPathNameByHandleW(h, buf, 32768, FILE_NAME_NORMALIZED);
+    ::CloseHandle(h);
+    if (n == 0 || n >= 32768)
+        return make_error<Path>("GetFinalPathNameByHandleW");
+    std::wstring s{buf, n};
+    if (s.size() >= 4 && s.substr(0, 4) == L"\\\\?\\") s = s.substr(4);
+    return Path{s};
 }
 
 Result<std::vector<Path>> list_dir(const Path& dir) {
@@ -123,7 +135,21 @@ Result<void> remove_dir(const Path& p) {
 }
 
 Result<void> remove_all(const Path& p) {
-    (void)p; return make_error("remove_all: not yet implemented");
+    auto ex = rivet::fs::exists(p);
+    if (!ex) return propagate<void>(ex);
+    if (!*ex) return {};
+    auto st = stat(p);
+    if (!st) return propagate<void>(st);
+    if (st->is_dir) {
+        auto entries = list_dir(p);
+        if (!entries) return propagate<void>(entries);
+        for (const auto& entry : *entries) {
+            auto r = remove_all(entry);
+            if (!r) return r;
+        }
+        return remove_dir(p);
+    }
+    return remove_file(p);
 }
 
 Result<void> copy_file(const Path& from, const Path& to) {
@@ -140,11 +166,14 @@ Result<void> rename_atomic(const Path& from, const Path& to) {
 }
 
 Result<void> create_symlink(const Path& target, const Path& link) {
-    DWORD flags = SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
-    if (::CreateSymbolicLinkW(to_wide(link).c_str(), to_wide(target).c_str(), flags))
+    // Try with admin privilege (no special flag required).
+    if (::CreateSymbolicLinkW(to_wide(link).c_str(), to_wide(target).c_str(), 0))
         return {};
-    // Fallback for directories: try junction (TODO).
-    return make_error("CreateSymbolicLinkW: requires Developer Mode");
+    // Retry with Developer Mode flag (works for unprivileged users).
+    if (::CreateSymbolicLinkW(to_wide(link).c_str(), to_wide(target).c_str(),
+                               SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE))
+        return {};
+    return make_error("CreateSymbolicLinkW");
 }
 
 // ─── FileHandle ───────────────────────────────────────────────────────────────
@@ -225,15 +254,19 @@ Result<std::vector<std::byte>> read_file(const Path& p) {
 
 Result<void> write_atomic(const Path& dest, ByteSpan data) {
     auto tmp = temp_path_near(dest);
-    auto fh  = open(tmp, OpenMode::Write | OpenMode::Create | OpenMode::Truncate);
-    if (!fh) return propagate<void>(fh);
-    size_t w = 0;
-    while (w < data.size()) {
-        auto n = fh->write(ByteSpan{data.data() + w, data.size() - w});
-        if (!n) return propagate<void>(n);
-        w += *n;
-    }
-    RIVET_TRY(fh->fsync());
+    {
+        // Close fh before rename_atomic: Windows won't move an open file
+        // unless it was opened with FILE_SHARE_DELETE.
+        auto fh  = open(tmp, OpenMode::Write | OpenMode::Create | OpenMode::Truncate);
+        if (!fh) return propagate<void>(fh);
+        size_t w = 0;
+        while (w < data.size()) {
+            auto n = fh->write(ByteSpan{data.data() + w, data.size() - w});
+            if (!n) return propagate<void>(n);
+            w += *n;
+        }
+        RIVET_TRY(fh->fsync());
+    } // CloseHandle called here before MoveFileExW
     return rename_atomic(tmp, dest);
 }
 
