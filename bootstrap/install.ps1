@@ -99,6 +99,38 @@ try {
         Write-Host "Restart your terminal for the change to take effect."
     }
 
+    # ─── LLVM toolchain bootstrap ────────────────────────────────────────────
+    # Published by publish-toolchain.yml. Set $env:RIVET_SKIP_TOOLCHAIN=1 to
+    # skip; $env:RIVET_LLVM_VERSION overrides the default version.
+
+    if ($env:RIVET_SKIP_TOOLCHAIN -ne "1") {
+        $LlvmVersion = if ($env:RIVET_LLVM_VERSION) { $env:RIVET_LLVM_VERSION } else { "18.1.8" }
+        $RivetExe    = Join-Path $BinDir "rivet.exe"
+        # Detect a pre-existing toolchain to avoid re-downloading on re-runs.
+        $HasToolchain = $false
+        try {
+            $tcList = & $RivetExe toolchain list 2>$null
+            if ($LASTEXITCODE -eq 0 -and ($tcList -join "`n") -match 'clang-') { $HasToolchain = $true }
+        } catch {}
+
+        if ($HasToolchain) {
+            Write-Host ""
+            Write-Host "Toolchain already installed — skipping bootstrap."
+        } else {
+            Write-Host ""
+            Write-Host "Installing LLVM toolchain $LlvmVersion ..."
+            Write-Host "  (set `$env:RIVET_SKIP_TOOLCHAIN=1 to skip)"
+            try {
+                & $RivetExe toolchain install $LlvmVersion
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Warning "Toolchain install failed. Retry: rivet toolchain install $LlvmVersion"
+                }
+            } catch {
+                Write-Warning "Toolchain install failed: $_"
+            }
+        }
+    }
+
     # ─── Done ─────────────────────────────────────────────────────────────────
 
     Write-Host ""

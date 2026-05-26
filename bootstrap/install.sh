@@ -164,6 +164,34 @@ case "$PATH" in
         ;;
 esac
 
+# ─── LLVM toolchain bootstrap ────────────────────────────────────────────────
+#
+# A working Rivet needs a bundled LLVM. The published toolchain bundles live
+# at github.com/fedres/Rivet/releases/tag/toolchain-<version> (uploaded by
+# the publish-toolchain.yml Actions workflow).
+#
+# Set RIVET_SKIP_TOOLCHAIN=1 to skip; useful for CI where the toolchain
+# is pre-cached or comes from a registry. RIVET_LLVM_VERSION overrides the
+# version we'd otherwise install by default.
+
+if [ "${RIVET_SKIP_TOOLCHAIN:-0}" = "0" ]; then
+    DEFAULT_LLVM_VERSION="${RIVET_LLVM_VERSION:-18.1.8}"
+    if "$RIVET_HOME/bin/rivet" toolchain list 2>/dev/null | grep -q 'clang-'; then
+        echo ""
+        echo "Toolchain already installed — skipping bootstrap."
+    else
+        echo ""
+        echo "Installing LLVM toolchain ${DEFAULT_LLVM_VERSION}..."
+        echo "  (set RIVET_SKIP_TOOLCHAIN=1 to skip)"
+        if ! "$RIVET_HOME/bin/rivet" toolchain install "$DEFAULT_LLVM_VERSION"; then
+            echo ""
+            echo "warning: toolchain install failed. You can retry with:"
+            echo "  rivet toolchain install $DEFAULT_LLVM_VERSION"
+            echo "Or set RIVET_TOOLCHAIN_BASE_URL to point at a mirror."
+        fi
+    fi
+fi
+
 # ─── Done ─────────────────────────────────────────────────────────────────────
 
 echo ""

@@ -1096,9 +1096,13 @@ int cmd_toolchain(const Context& ctx) {
 
         std::string archive_name = std::format(
             "rivet-toolchain-clang-{}-{}.tar.zst", version, triple);
+        // Hosted by the publish-toolchain.yml workflow (Actions → "Publish
+        // LLVM Toolchain Bundle"). Override with RIVET_TOOLCHAIN_BASE_URL
+        // to host bundles privately (e.g. for air-gapped enterprises).
+        std::string base = rivet::env::get("RIVET_TOOLCHAIN_BASE_URL")
+            .value_or("https://github.com/fedres/Rivet/releases/download");
         std::string url_str = std::format(
-            "https://github.com/rivet-lang/rivet/releases/download/v{}/{}",
-            version, archive_name);
+            "{}/toolchain-{}/{}", base, version, archive_name);
 
         auto url_r = rivet::net::Url::parse(url_str);
         if (!url_r) {
