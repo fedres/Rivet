@@ -129,7 +129,7 @@ TEST_F(ResolverTest, ResolveLockedReturnsExistingEntries) {
     spec.version    = "*";
     root.dependencies["leaf"] = spec;
 
-    LockFile existing;
+    rivet::pkg::LockFile existing;
     existing.root_name    = "root";
     existing.root_version = "0.1.0";
     LockedDep d;
@@ -156,7 +156,7 @@ TEST_F(ResolverTest, ResolveLockedFailsOnMissingDep) {
     spec.version    = "*";
     root.dependencies["ghost"] = spec;
 
-    LockFile existing;
+    rivet::pkg::LockFile existing;
     existing.root_name = "root"; existing.root_version = "0.1.0";
     // Note: NO entry for "ghost".
 
@@ -179,7 +179,7 @@ TEST_F(ResolverTest, ResolveLockedFailsOnVersionDrift) {
     spec.version    = "^2.0";   // requires major 2
     root.dependencies["leaf"] = spec;
 
-    LockFile existing;
+    rivet::pkg::LockFile existing;
     existing.root_name = "root"; existing.root_version = "0.1.0";
     LockedDep d;
     d.name = "leaf"; d.version = "1.0.0"; d.source = "path";
