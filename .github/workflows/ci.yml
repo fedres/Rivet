@@ -40,18 +40,12 @@ jobs:
           - os: macos-14
             runner: macos-14
             preset: release
-          - os: macos-13
-            runner: macos-13
-            preset: release
           # ── Windows ────────────────────────────────────────────────────────
           - os: windows-2022
             runner: windows-2022
             preset: debug
           - os: windows-2022
             runner: windows-2022
-            preset: release
-          - os: windows-2019
-            runner: windows-2019
             preset: release
 
     steps:

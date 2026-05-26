@@ -13,6 +13,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <spawn.h>
+#include <atomic>
 
 extern char** environ;
 
