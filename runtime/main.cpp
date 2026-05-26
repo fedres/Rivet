@@ -9,8 +9,8 @@
 
 int main(int argc, char* argv[]) {
     // Enable VT/ANSI processing on Windows 10+ consoles.
-    rivet::terminal::enable_vt_processing(1);
-    rivet::terminal::enable_vt_processing(2);
+    (void)rivet::terminal::enable_vt_processing(1);
+    (void)rivet::terminal::enable_vt_processing(2);
 
     // Initialize TLS trust store for all network operations.
     if (auto r = rivet::net::init_tls_trust_store(); !r) {
