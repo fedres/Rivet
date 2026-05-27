@@ -134,7 +134,27 @@ def main() -> None:
         run([str(rivet_bin), "add", "fmt"], cwd=project, env=env, timeout=120)
 
         banner("step 6: rivet fetch  (vcpkg builds fmt — slow)")
-        run([str(rivet_bin), "fetch"], cwd=project, env=env, timeout=1800)
+        try:
+            run([str(rivet_bin), "fetch"], cwd=project, env=env, timeout=1800)
+        except SystemExit:
+            # vcpkg writes detailed diagnostics into buildtrees/ that the
+            # outer "rivet fetch" log only references by path. Inline them
+            # so CI failures are debuggable without an artifact download.
+            banner("=== fetch failed: dumping vcpkg diagnostics ===")
+            vcpkg_root = rivet_home / "sources" / "vcpkg"
+            for sub in ("buildtrees", "triplets-rivet"):
+                d = vcpkg_root / sub
+                if not d.exists():
+                    continue
+                for p in sorted(d.rglob("*")):
+                    if p.is_file() and p.suffix in (".log", ".cmake", ".txt"):
+                        try:
+                            data = p.read_text(errors="replace")
+                        except OSError:
+                            continue
+                        print(f"\n----- {p} -----", flush=True)
+                        print(data[-4000:] if len(data) > 4000 else data, flush=True)
+            raise
 
         banner("step 7: rivet build")
         run([str(rivet_bin), "build"], cwd=project, env=env, timeout=600)
