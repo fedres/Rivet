@@ -109,8 +109,11 @@ def main() -> None:
         run([str(rivet_bin), "--version"], env=env, timeout=30, capture=True)
 
         banner(f"step 2: rivet toolchain install {args.llvm}")
+        # The bundle is ~350 MB from GitHub Releases. Most runs finish under
+        # 90s, but CDN latency to fresh Windows runners has been observed to
+        # spike past 10 minutes on bad days — bump generous to avoid flakes.
         run([str(rivet_bin), "toolchain", "install", args.llvm],
-            env=env, timeout=600)
+            env=env, timeout=1500)
 
         banner("step 3: rivet new hello-fmt")
         run([str(rivet_bin), "new", "hello-fmt"], cwd=workdir, env=env, timeout=60)
