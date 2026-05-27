@@ -441,6 +441,18 @@ std::string serialize(const Manifest& m) {
     if (!m.license.empty())
         out += std::format("license     = \"{}\"\n", m.license);
     out += "\n[build]\n";
+    // Preserve the build-system marker — losing this on a re-serialize would
+    // silently flip a cmake-drive project back to rivet's native build engine.
+    const char* sys_str = nullptr;
+    switch (m.build.system) {
+        case BuildSystem::Rivet:    sys_str = nullptr;     break;
+        case BuildSystem::CMake:    sys_str = "cmake";     break;
+        case BuildSystem::Make:     sys_str = "make";      break;
+        case BuildSystem::Autoconf: sys_str = "autoconf";  break;
+        case BuildSystem::Meson:    sys_str = "meson";     break;
+        case BuildSystem::Custom:   sys_str = "custom";    break;
+    }
+    if (sys_str) out += std::format("system  = \"{}\"\n", sys_str);
     out += std::format("cxx_std = \"{}\"\n", m.build.cxx_std);
     if (!m.dependencies.empty()) {
         out += "\n[dependencies]\n";

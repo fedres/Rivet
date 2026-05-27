@@ -1142,34 +1142,83 @@ static std::string json_str(const std::string& json, const std::string& key) {
     return val;
 }
 
-int cmd_add(const Context& ctx) {
-    auto args = ctx.args_after_subcommand();
-    if (args.empty()) {
-        std::cerr << "usage: rivet add <package>[@version]\n"
-                  << "       rivet add fmt@10.2.0\n";
-        return 1;
-    }
-
-    // Parse <name>[@version].
-    std::string pkg_spec{args[0]};
-    std::string pkg_name, pkg_version;
-    auto at = pkg_spec.find('@');
-    if (at != std::string::npos) {
-        pkg_name    = pkg_spec.substr(0, at);
-        pkg_version = pkg_spec.substr(at + 1);
-    } else {
-        pkg_name = pkg_spec;
-    }
-
+// Resolve one name@version pair, mutate the manifest, and print the same
+// per-package banner the single-add path used to. Returns false only on
+// hard validation errors (e.g. invalid package name) — resolution misses
+// fall back to "*" so we still record the user's intent.
+static bool stage_one_dep(const std::string& pkg_name,
+                          const std::string& pin,
+                          rivet::pkg::Manifest& manifest,
+                          rivet::pkg::SourceRegistry& registry) {
     for (char c : pkg_name) {
         if (!std::isalnum((unsigned char)c) && c != '_' && c != '-') {
             std::cerr << "error: invalid package name '" << pkg_name
                       << "': only a-z, 0-9, _, - allowed\n";
-            return 1;
+            return false;
         }
     }
 
-    // Find manifest.
+    std::string version = pin;
+    rivet::pkg::PackageRef ref;
+    ref.name               = pkg_name;
+    ref.version_constraint = version.empty() ? "*" : version;
+
+    std::cout << std::format("Resolving {} via vcpkg...\n", pkg_name);
+    if (auto resolved = registry.resolve(ref)) {
+        version = resolved->version;
+        std::cout << std::format("  Found {} {} ({})\n",
+            resolved->name, resolved->version, resolved->source_id);
+    } else if (version.empty()) {
+        std::cout << std::format("note: could not resolve {}: {}\n",
+            pkg_name, resolved.error().message);
+        std::cout << "      pinning to '*' (any version) — edit rivet.toml to refine.\n";
+        version = "*";
+    }
+
+    bool updating = manifest.dependencies.count(pkg_name) > 0;
+    std::cout << std::format("{} {} = \"{}\"\n",
+        updating ? "Updating" : "Adding", pkg_name, version);
+
+    rivet::pkg::DepSpec spec;
+    spec.kind    = rivet::pkg::DepKind::Registry;
+    spec.version = version;
+    manifest.dependencies[pkg_name] = std::move(spec);
+    return true;
+}
+
+// Read .rivet/cmake/missing-packages.txt (one package name per line, written
+// by cmake-drive after `cmake configure`). Returns an empty vec if the file
+// is missing — the caller decides whether that's an error.
+static std::vector<std::string> read_missing_packages_cache(const Path& root) {
+    Path cache = root / ".rivet" / "cmake" / "missing-packages.txt";
+    auto data = rivet::fs::read_file(cache);
+    if (!data) return {};
+    std::string_view sv(reinterpret_cast<const char*>(data->data()), data->size());
+    std::vector<std::string> out;
+    size_t pos = 0;
+    while (pos < sv.size()) {
+        size_t nl = sv.find('\n', pos);
+        std::string_view line = sv.substr(pos,
+            (nl == std::string_view::npos ? sv.size() : nl) - pos);
+        pos = (nl == std::string_view::npos ? sv.size() : nl + 1);
+        // Trim trailing CR (Windows line endings).
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+            line.remove_suffix(1);
+        if (!line.empty()) out.emplace_back(line);
+    }
+    return out;
+}
+
+int cmd_add(const Context& ctx) {
+    auto args = ctx.args_after_subcommand();
+    if (args.empty()) {
+        std::cerr << "usage: rivet add <package>[@version]\n"
+                  << "       rivet add fmt@10.2.0\n"
+                  << "       rivet add --from-find-package\n";
+        return 1;
+    }
+
+    // Find manifest first — both paths need it.
     // Use the actual OS-level cwd, not $PWD: tools that invoke rivet via
     // fork+exec (Python subprocess, build scripts, etc.) update the process
     // cwd via chdir() but leave $PWD pointing at the parent's cwd. Reading
@@ -1183,39 +1232,54 @@ int cmd_add(const Context& ctx) {
     }
     auto manifest = *manifest_r;
 
-    // Resolve through the SourceRegistry (vcpkg by default, plus local/git
-    // overrides). Falls back to "*" if every source fails — the user can
-    // pin manually.
+    // Shared resolver — vcpkg + git/local overrides. Falls back to "*" if a
+    // source fails, so the user always gets a manifest entry to refine.
     auto home_r = rivet::env::rivet_home();
     Path rivet_home_path = home_r ? *home_r : Path{".rivet"};
     auto registry = rivet::pkg::make_default_registry(rivet_home_path);
 
-    rivet::pkg::PackageRef ref;
-    ref.name               = pkg_name;
-    ref.version_constraint = pkg_version.empty() ? "*" : pkg_version;
+    // Build the list of (name, pin) pairs to stage.
+    std::vector<std::pair<std::string, std::string>> to_add;
 
-    std::cout << std::format("Resolving {} via vcpkg...\n", pkg_name);
-    if (auto resolved = registry.resolve(ref)) {
-        pkg_version = resolved->version;
-        std::cout << std::format("  Found {} {} ({})\n",
-            resolved->name, resolved->version, resolved->source_id);
-    } else if (pkg_version.empty()) {
-        std::cout << std::format("note: could not resolve {}: {}\n",
-            pkg_name, resolved.error().message);
-        std::cout << "      pinning to '*' (any version) — edit rivet.toml to refine.\n";
-        pkg_version = "*";
+    if (args[0] == "--from-find-package") {
+        auto missing = read_missing_packages_cache(manifest.root_dir);
+        if (missing.empty()) {
+            std::cerr << "error: no missing-packages cache found at "
+                      << ".rivet/cmake/missing-packages.txt\n"
+                      << "       run `rivet build` (with [build] system = \"cmake\") first.\n";
+            return 1;
+        }
+        // Skip names already in [dependencies] — idempotent re-runs.
+        size_t skipped = 0;
+        for (auto& name : missing) {
+            if (manifest.dependencies.count(name)) { ++skipped; continue; }
+            to_add.emplace_back(name, std::string{});
+        }
+        std::cout << std::format(
+            "  {} package(s) reported by cmake; {} already in manifest, {} to add\n",
+            missing.size(), skipped, to_add.size());
+        if (to_add.empty()) return 0;
+    } else {
+        // Single explicit <name>[@version] form.
+        std::string pkg_spec{args[0]};
+        std::string pkg_name, pkg_version;
+        auto at = pkg_spec.find('@');
+        if (at != std::string::npos) {
+            pkg_name    = pkg_spec.substr(0, at);
+            pkg_version = pkg_spec.substr(at + 1);
+        } else {
+            pkg_name = pkg_spec;
+        }
+        to_add.emplace_back(std::move(pkg_name), std::move(pkg_version));
     }
 
-    bool updating = manifest.dependencies.count(pkg_name) > 0;
-    std::cout << std::format("{} {} = \"{}\"\n",
-        updating ? "Updating" : "Adding", pkg_name, pkg_version);
+    // Stage each dep into the in-memory manifest.
+    for (const auto& [name, pin] : to_add) {
+        if (!stage_one_dep(name, pin, manifest, registry))
+            return 1;
+    }
 
-    rivet::pkg::DepSpec spec;
-    spec.kind    = rivet::pkg::DepKind::Registry;
-    spec.version = pkg_version;
-    manifest.dependencies[pkg_name] = std::move(spec);
-
-    // Re-serialise rivet.toml.
+    // Re-serialise rivet.toml once, after all mutations.
     auto toml_text  = rivet::pkg::serialize(manifest);
     auto toml_bytes = rivet::ByteSpan{
         reinterpret_cast<const std::byte*>(toml_text.data()), toml_text.size()};
@@ -1224,17 +1288,19 @@ int cmd_add(const Context& ctx) {
         return 1;
     }
 
-    // Regenerate lock file via the new multi-source resolver.
+    // Regenerate lock file once.
     rivet::pkg::Resolver r{registry};
     if (auto lock_r = r.resolve(manifest)) {
         (void)rivet::pkg::write_lockfile(*lock_r, manifest.root_dir / "rivet.lock");
     } else if (auto stub = rivet::pkg::resolve(manifest)) {
-        // Fall back to flat lockfile if vcpkg is unreachable so `add` still
-        // updates rivet.lock entries the user can inspect.
         (void)rivet::pkg::write_lockfile(*stub, manifest.root_dir / "rivet.lock");
     }
 
-    std::cout << std::format("  {} \"{}\" written to rivet.toml\n", pkg_name, pkg_version);
+    if (to_add.size() == 1) {
+        std::cout << std::format("  {} written to rivet.toml\n", to_add[0].first);
+    } else {
+        std::cout << std::format("  {} packages written to rivet.toml\n", to_add.size());
+    }
     return 0;
 }
 

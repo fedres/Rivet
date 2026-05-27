@@ -129,6 +129,27 @@ TEST_F(ManifestTest, SerializeRoundTrip) {
     EXPECT_NE(text.find("2.3.4"),     std::string::npos);
 }
 
+// Regression: `rivet add` on a cmake-drive project used to silently strip
+// `[build] system = "cmake"` when re-serializing the manifest. Lock that
+// down — serialize must round-trip the build-system selector.
+TEST_F(ManifestTest, SerializePreservesBuildSystem) {
+    auto path = write_toml(
+        "[package]\n"
+        "name = \"x\"\n"
+        "version = \"0.1.0\"\n"
+        "\n"
+        "[build]\n"
+        "system = \"cmake\"\n"
+    );
+    auto r = parse_manifest(path);
+    ASSERT_TRUE(r.has_value());
+    EXPECT_EQ(r->build.system, BuildSystem::CMake);
+
+    auto text = serialize(*r);
+    EXPECT_NE(text.find("system  = \"cmake\""), std::string::npos)
+        << "serialize() dropped [build] system marker; text was:\n" << text;
+}
+
 // ─── LockFile ─────────────────────────────────────────────────────────────────
 
 TEST_F(ManifestTest, LockfileResolveNoDeps) {

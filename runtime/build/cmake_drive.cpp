@@ -189,13 +189,27 @@ Result<void> build_via_cmake(const CmakeDriveOptions& opts,
     cfg.capture_stderr = false;
 
     auto cfg_result = spawn_capture(std::move(cfg), "cmake configure");
+    auto missing_now = scan_configure_output(cfg_result.stdout_);
+
+    // Persist the scanned list so `rivet add --from-find-package` can
+    // consume it without re-running cmake. Overwritten every configure.
+    {
+        std::string blob;
+        for (const auto& m : missing_now) { blob += m; blob += '\n'; }
+        rivet::ByteSpan b{
+            reinterpret_cast<const std::byte*>(blob.data()), blob.size()};
+        // Best-effort cache; failure here doesn't break the build.
+        [[maybe_unused]] auto _ =
+            rivet::fs::write_atomic(build_dir / "missing-packages.txt", b);
+    }
+
     if (cfg_result.exit_code != 0) {
         // If the failure was a missing find_package, surface it before bailing.
-        auto missing = scan_configure_output(cfg_result.stdout_);
-        if (!missing.empty()) {
+        if (!missing_now.empty()) {
             std::cerr << "\n  cmake reported missing packages:\n";
-            for (const auto& m : missing)
+            for (const auto& m : missing_now)
                 std::cerr << "    - " << m << "  (try: rivet add " << m << ")\n";
+            std::cerr << "\n  add them all in one go: rivet add --from-find-package\n";
         }
         return make_error("cmake configure failed (exit "
                           + std::to_string(cfg_result.exit_code) + ")");
@@ -213,11 +227,11 @@ Result<void> build_via_cmake(const CmakeDriveOptions& opts,
     // Even on success, surface any packages cmake reported as missing
     // — those are the ones the user should `rivet add` to fully cover
     // the project's find_package() calls.
-    auto missing = scan_configure_output(cfg_result.stdout_);
-    if (!missing.empty()) {
+    if (!missing_now.empty()) {
         std::cout << "\n  cmake reported missing packages (build may have used fallbacks):\n";
-        for (const auto& m : missing)
+        for (const auto& m : missing_now)
             std::cout << "    - " << m << "  (try: rivet add " << m << ")\n";
+        std::cout << "\n  add them all in one go: rivet add --from-find-package\n";
     }
 
     std::cout << "\n  Build dir: " << build_dir.string() << "\n";
