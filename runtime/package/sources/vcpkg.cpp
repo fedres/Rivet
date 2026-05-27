@@ -128,6 +128,15 @@ Result<Path> write_overlay_triplet(const Path& vcpkg_root,
     std::string ar_path     = tc.llvm_lib().generic_string();
     std::string ld_path     = tc.lld_link().generic_string();
     std::string ranlib_path = ar_path;
+    // CMake's vs_link_exe wrapper insists on invoking a Resource Compiler
+    // for manifest embedding even on header-only ports like fmt. The
+    // system rc.exe (from Windows Kits) doesn't always cooperate with
+    // CMake's wrapper — vcpkg's fmt build on a fresh runner reports
+    // "RC Pass 1: ... failed (exit code 0)" and no .res file. llvm-rc is
+    // a clang-shipped drop-in replacement that the same wrapper drives
+    // reliably.
+    std::string rc_path     = (tc.root / "bin" / "llvm-rc.exe").generic_string();
+    std::string mt_path     = (tc.root / "bin" / "llvm-mt.exe").generic_string();
 #else
     std::string cc_path     = tc.clang().generic_string();
     std::string cxx_path    = tc.clangpp().generic_string();
@@ -154,6 +163,10 @@ Result<Path> write_overlay_triplet(const Path& vcpkg_root,
         "set(CMAKE_AR           \"{}\" CACHE FILEPATH \"\")\n"
         "set(CMAKE_RANLIB       \"{}\" CACHE FILEPATH \"\")\n"
         "set(CMAKE_LINKER       \"{}\" CACHE FILEPATH \"\")\n"
+#if defined(_WIN32)
+        "set(CMAKE_RC_COMPILER  \"{}\" CACHE FILEPATH \"\")\n"
+        "set(CMAKE_MT           \"{}\" CACHE FILEPATH \"\")\n"
+#endif
         "if(APPLE AND NOT CMAKE_OSX_SYSROOT)\n"
         "    execute_process(COMMAND xcrun --show-sdk-path\n"
         "                    OUTPUT_VARIABLE _rivet_sdk_path\n"
@@ -175,7 +188,11 @@ Result<Path> write_overlay_triplet(const Path& vcpkg_root,
         "        set(CMAKE_${{_v}}_LINKER_FLAGS_INIT \"-fuse-ld=lld\")\n"
         "    endforeach()\n"
         "endif()\n",
-        cc_path, cxx_path, ar_path, ranlib_path, ld_path);
+        cc_path, cxx_path, ar_path, ranlib_path, ld_path
+#if defined(_WIN32)
+        , rc_path, mt_path
+#endif
+        );
     if (auto r = write_text(chainload, chainload_text); !r)
         return make_error<Path>(r.error().message);
 

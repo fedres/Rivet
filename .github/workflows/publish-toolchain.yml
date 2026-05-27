@@ -110,6 +110,7 @@ jobs:
                        llvm-ar llvm-lib llvm-dlltool \
                        llvm-strip llvm-ranlib llvm-nm \
                        llvm-objcopy llvm-readelf llvm-readobj llvm-objdump \
+                       llvm-rc llvm-windres llvm-mt \
                        clang-scan-deps llvm-symbolizer llvm-cov llvm-cxxfilt; do
             for f in "extract/bin/$tool" "extract/bin/$tool.exe"; do
               [ -e "$f" ] && cp -aL "$f" "keep/bin/" || true
