@@ -107,6 +107,23 @@ jobs:
           # without crashing.
           ./.rivet/build/debug/bin/rivet --version
 
+      - name: M1 self-build (rivet builds rivet, Windows)
+        if: runner.os == 'Windows'
+        continue-on-error: ${{ matrix.allow_failure }}
+        env:
+          RIVET_HOME: ${{ runner.temp }}\rivet-self-home
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:RIVET_HOME | Out-Null
+          .\build\release\rivet.exe toolchain install 19.1.7
+          if ($LASTEXITCODE -ne 0) { throw "toolchain install failed" }
+          .\build\release\rivet.exe build
+          if ($LASTEXITCODE -ne 0) { throw "rivet build failed" }
+          $Bin = ".\.rivet\build\debug\bin\rivet.exe"
+          if (-not (Test-Path $Bin)) { throw "rivet binary not produced at $Bin" }
+          & $Bin --version
+          if ($LASTEXITCODE -ne 0) { throw "self-built rivet --version exited $LASTEXITCODE" }
+
       # ── Upload logs on failure ─────────────────────────────────────────
       - name: Upload artifacts on failure
         if: failure()
