@@ -166,6 +166,15 @@ Result<Path> write_overlay_triplet(const Path& vcpkg_root,
 #if defined(_WIN32)
         "set(CMAKE_RC_COMPILER  \"{}\" CACHE FILEPATH \"\")\n"
         "set(CMAKE_MT           \"{}\" CACHE FILEPATH \"\")\n"
+        // Pin the static CRT for every vcpkg port we drive on Windows.
+        // The x64-windows-static-rivet triplet inherits VCPKG_CRT_LINKAGE=
+        // static from vcpkg's base triplet, but vcpkg's own toolchain
+        // shim only converts that into CMAKE_MSVC_RUNTIME_LIBRARY *if it
+        // isn't already cached*. CMake's clang-cl support defaults to
+        // /MD before vcpkg's hook runs, so the cache ends up dynamic.
+        // Setting it here in the chainload pins it pre-CMake-detection.
+        "set(CMAKE_MSVC_RUNTIME_LIBRARY \"MultiThreaded$<$<CONFIG:Debug>:Debug>\" "
+            "CACHE STRING \"\")\n"
 #endif
         "if(APPLE AND NOT CMAKE_OSX_SYSROOT)\n"
         "    execute_process(COMMAND xcrun --show-sdk-path\n"
