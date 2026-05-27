@@ -8,6 +8,7 @@
 #include "../build/graph.hpp"
 #include "../build/executor.hpp"
 #include "../build/scheduler.hpp"
+#include "../build/pkgconfig.hpp"
 #include "../cache/store.hpp"
 #include "../cache/key.hpp"
 #include "../package/manifest.hpp"
@@ -257,12 +258,19 @@ int cmd_build(const Context& ctx) {
 
     // 3b. Wire fetched dependencies. After `rivet fetch` the per-triplet
     // install tree sits under <rivet_home>/cache/deps/<root>/vcpkg-installed/
-    // <triplet>/{include,lib}. We unconditionally add those paths so the
-    // compile/link steps can pick up vcpkg-installed libraries.
+    // <triplet>/{include,lib,lib/pkgconfig}.
+    //
+    // We prefer pkg-config metadata (in lib/pkgconfig/*.pc) because it tells
+    // us EXACTLY which `-l<name>` to emit and which transitive deps to pull
+    // in. Falls back to file-glob for old vcpkg ports that don't ship .pc
+    // files — those just get every static archive linked, which is what we
+    // did before.
     struct InstalledDeps {
-        std::vector<Path> include_dirs;
-        std::vector<Path> lib_dirs;
-        std::vector<Path> link_libs;
+        std::vector<Path>        include_dirs;
+        std::vector<Path>        lib_dirs;
+        std::vector<Path>        link_libs;     // direct file refs (.a / .lib)
+        std::vector<std::string> link_flags;    // pkg-config-derived `-lfoo`, `-pthread`, etc.
+        std::vector<std::string> compile_flags; // pkg-config-derived `-DXYZ`, `-pthread`, etc.
     };
     auto installed_deps = [&]() -> InstalledDeps {
         InstalledDeps deps;
@@ -273,10 +281,49 @@ int cmd_build(const Context& ctx) {
                             / "vcpkg-installed" / rivet::pkg::host_vcpkg_triplet();
         Path include_dir  = install_root / "include";
         Path lib_dir      = install_root / "lib";
+        Path pkgcfg_dir   = lib_dir / "pkgconfig";
         if (rivet::fs::exists(include_dir).value_or(false))
             deps.include_dirs.push_back(include_dir);
-        if (rivet::fs::exists(lib_dir).value_or(false)) {
-            deps.lib_dirs.push_back(lib_dir);
+        if (!rivet::fs::exists(lib_dir).value_or(false))
+            return deps;
+        deps.lib_dirs.push_back(lib_dir);
+
+        // Try pkg-config first: one .pc per declared dep, then resolve
+        // transitive Requires.
+        bool used_pkgconfig = false;
+        if (rivet::fs::exists(pkgcfg_dir).value_or(false)) {
+            std::vector<std::string> roots;
+            roots.reserve(manifest.dependencies.size());
+            for (const auto& [name, _] : manifest.dependencies) roots.push_back(name);
+            // Static link: include `Requires.private` since we're producing
+            // an executable that must resolve every symbol transitively.
+            auto resolved = rivet::build::resolve_pkgs(roots, {pkgcfg_dir}, /*static_link=*/true);
+            if (resolved && !resolved->resolved.empty()) {
+                used_pkgconfig = true;
+                // Translate `-I`/`-L` from cflags/libs into include/lib dirs;
+                // leave the other flags alone so they reach clang verbatim.
+                for (const auto& f : resolved->cflags) {
+                    if (f.starts_with("-I")) {
+                        Path p{f.substr(2)};
+                        // Skip the install include dir we already added.
+                        if (p != include_dir) deps.include_dirs.push_back(std::move(p));
+                    } else {
+                        deps.compile_flags.push_back(f);
+                    }
+                }
+                for (const auto& f : resolved->libs) {
+                    if (f.starts_with("-L")) {
+                        Path p{f.substr(2)};
+                        if (p != lib_dir) deps.lib_dirs.push_back(std::move(p));
+                    } else {
+                        deps.link_flags.push_back(f);
+                    }
+                }
+            }
+        }
+
+        // Fallback for ports without .pc files: just glob the install tree.
+        if (!used_pkgconfig) {
             if (auto entries = rivet::fs::list_dir(lib_dir)) {
                 for (const auto& e : *entries) {
                     auto ext = e.extension().string();
@@ -290,11 +337,15 @@ int cmd_build(const Context& ctx) {
 
     for (const auto& d : installed_deps.include_dirs)
         cfg.include_paths.push_back(d);
+    for (const auto& f : installed_deps.compile_flags)
+        cfg.extra_flags.push_back(f);
 
     if (!installed_deps.include_dirs.empty()) {
-        std::cout << std::format("Using {} dep include dir(s); {} link lib(s)\n",
+        std::cout << std::format(
+            "Using {} dep include dir(s); {} link lib(s); {} link flag(s)\n",
             installed_deps.include_dirs.size(),
-            installed_deps.link_libs.size());
+            installed_deps.link_libs.size(),
+            installed_deps.link_flags.size());
     }
 
     std::cout << std::format("Building {} {} [{}] with clang {}\n",
@@ -384,8 +435,9 @@ int cmd_build(const Context& ctx) {
     lj.target_triple = cfg.target_triple;
     lj.lto           = cfg.lto;
     lj.sanitizers    = cfg.sanitizers;
-    for (const auto& p : installed_deps.lib_dirs)  lj.lib_search_paths.push_back(p.string());
-    for (const auto& l : installed_deps.link_libs) lj.link_libs.push_back(l);
+    for (const auto& p : installed_deps.lib_dirs)   lj.lib_search_paths.push_back(p.string());
+    for (const auto& l : installed_deps.link_libs)  lj.link_libs.push_back(l);
+    for (const auto& f : installed_deps.link_flags) lj.flags.push_back(f);
 
     auto link_cmd_r = rivet::toolchain::make_link_command(lj, tc);
     if (!link_cmd_r) {

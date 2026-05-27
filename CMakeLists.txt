@@ -169,6 +169,7 @@ add_library(rivet_runtime STATIC
     runtime/build/graph.cpp
     runtime/build/scheduler.cpp
     runtime/build/executor.cpp
+    runtime/build/pkgconfig.cpp
 
     # Cache layer
     runtime/cache/key.cpp
