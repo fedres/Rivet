@@ -9,6 +9,7 @@
 #include "../build/executor.hpp"
 #include "../build/scheduler.hpp"
 #include "../build/pkgconfig.hpp"
+#include "../build/multi_target.hpp"
 #include "../toolchain/sdk.hpp"
 #include "../archive/tar_zst.hpp"
 #include "../cache/store.hpp"
@@ -417,6 +418,64 @@ int cmd_build(const Context& ctx) {
     if (auto cache_dir_r = rivet::env::cache_dir()) {
         if (auto store_r = rivet::cache::Store::open(*cache_dir_r / "rivet" / "build"))
             cache_store = std::move(*store_r);
+    }
+
+    // ─── Multi-target build path (M1: rivet self-build, large projects) ──
+    //
+    // If the manifest declares [[lib]] / [[bin]] / [[test]] / [[vendor]]
+    // targets, dispatch to the multi-artefact engine. Single-binary
+    // projects (hello-fmt) leave manifest.targets empty and fall through
+    // to the original src/-scan path below.
+    if (!manifest.targets.empty()) {
+        rivet::build::BuildGraph graph;
+        rivet::build::InstalledExternalDeps ext;
+        ext.include_dirs = installed_deps.include_dirs;
+        ext.lib_dirs     = installed_deps.lib_dirs;
+        ext.link_libs    = installed_deps.link_libs;
+        ext.link_flags   = installed_deps.link_flags;
+
+        std::optional<rivet::cache::Store> cache_store_mt;
+        if (auto cache_dir_r = rivet::env::cache_dir()) {
+            if (auto store_r = rivet::cache::Store::open(*cache_dir_r / "rivet" / "build"))
+                cache_store_mt = std::move(*store_r);
+        }
+
+        auto artefacts = rivet::build::build_targets(
+            manifest, tc, cfg, ext, profile_name, graph,
+            cache_store_mt ? &*cache_store_mt : nullptr);
+        if (!artefacts) {
+            std::cerr << "error: " << artefacts.error().message << "\n";
+            return 1;
+        }
+
+        auto t_start = rivet::time::now();
+        std::size_t jobs = std::thread::hardware_concurrency();
+        auto on_progress = [](const rivet::build::TaskResult& r) {
+            if (r.cache_hit)      std::cout << "  \033[34m●\033[0m " << r.task_id << " (cached)\n";
+            else if (r.success)   std::cout << "  \033[32m✓\033[0m " << r.task_id << "\n";
+            else std::cerr << "  \033[31m✗\033[0m " << r.task_id
+                            << "\n" << r.stderr_out << "\n";
+        };
+        rivet::cache::Store* cache_ptr = cache_store_mt ? &*cache_store_mt : nullptr;
+        rivet::build::Executor executor{graph, jobs, on_progress, cache_ptr};
+        auto summary = executor.run();
+        auto elapsed = rivet::time::elapsed(t_start);
+
+        std::cout << std::format("\n{} compiled, {} cached, {} failed  [{:.1f}s]\n",
+            summary.succeeded, summary.cached, summary.failed,
+            static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()) / 1000.0);
+
+        if (summary.failed == 0) {
+            for (const auto& a : *artefacts) {
+                const char* tag =
+                    a.kind == rivet::pkg::TargetKind::Lib    ? "lib"   :
+                    a.kind == rivet::pkg::TargetKind::Vendor ? "lib"   :
+                    a.kind == rivet::pkg::TargetKind::Test   ? "test"  : "bin";
+                std::cout << std::format("  [{:<4}] {} → {}\n", tag, a.name,
+                                          a.artifact_path.string());
+            }
+        }
+        return summary.failed == 0 ? 0 : 1;
     }
 
     // 5. Collect source files (recursive scan of src/).

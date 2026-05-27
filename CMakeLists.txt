@@ -223,6 +223,7 @@ add_library(rivet_runtime STATIC
     runtime/build/scheduler.cpp
     runtime/build/executor.cpp
     runtime/build/pkgconfig.cpp
+    runtime/build/multi_target.cpp
 
     # Cache layer
     runtime/cache/key.cpp
