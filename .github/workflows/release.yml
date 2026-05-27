@@ -118,6 +118,11 @@ jobs:
       - name: List bundles
         run: ls -lh dist/
 
+      - name: Stage installer scripts as release assets
+        run: |
+          cp bootstrap/install.sh  dist/install.sh
+          cp bootstrap/install.ps1 dist/install.ps1
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -126,6 +131,8 @@ jobs:
             dist/*.tar.zst.sha256
             dist/*.zip
             dist/*.zip.sha256
+            dist/install.sh
+            dist/install.ps1
           generate_release_notes: true
           body: |
             ## Installation
