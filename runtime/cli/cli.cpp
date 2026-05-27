@@ -1288,12 +1288,14 @@ int cmd_add(const Context& ctx) {
         return 1;
     }
 
-    // Regenerate lock file once.
+    // Regenerate lock file once — at the workspace root if this manifest
+    // is a workspace member, else at the manifest's own dir.
+    Path lock_dst = rivet::pkg::lockfile_path_for(manifest);
     rivet::pkg::Resolver r{registry};
     if (auto lock_r = r.resolve(manifest)) {
-        (void)rivet::pkg::write_lockfile(*lock_r, manifest.root_dir / "rivet.lock");
+        (void)rivet::pkg::write_lockfile(*lock_r, lock_dst);
     } else if (auto stub = rivet::pkg::resolve(manifest)) {
-        (void)rivet::pkg::write_lockfile(*stub, manifest.root_dir / "rivet.lock");
+        (void)rivet::pkg::write_lockfile(*stub, lock_dst);
     }
 
     if (to_add.size() == 1) {
@@ -1356,7 +1358,7 @@ int cmd_fetch(const Context& ctx) {
     rivet::pkg::Resolver resolver{registry, opts};
 
     rivet::Result<rivet::pkg::LockFile> lock;
-    Path lockfile_path = manifest.root_dir / "rivet.lock";
+    Path lockfile_path = rivet::pkg::lockfile_path_for(manifest);
     if (locked) {
         auto existing = rivet::pkg::parse_lockfile(lockfile_path);
         if (!existing) {
@@ -1467,7 +1469,7 @@ int cmd_remove(const Context& ctx) {
     }
 
     if (auto lock_r = rivet::pkg::resolve(manifest))
-        (void)rivet::pkg::write_lockfile(*lock_r, manifest.root_dir / "rivet.lock");
+        (void)rivet::pkg::write_lockfile(*lock_r, rivet::pkg::lockfile_path_for(manifest));
 
     std::cout << std::format("  Removed {} from rivet.toml\n", pkg_name);
     return 0;

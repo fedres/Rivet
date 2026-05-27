@@ -316,6 +316,102 @@ spdlog = { version = "1.13", static = true }
     EXPECT_TRUE(w.dependencies.at("spdlog").static_link);
 }
 
+// ─── Workspace inheritance (C3: dep.workspace = true) ───────────────────────
+
+TEST_F(ManifestTest, WorkspaceInheritanceSubstitutesVersion) {
+    // Workspace root with a `fmt` pin.
+    auto ws_dir = tmp_dir / "ws";
+    auto member_dir = ws_dir / "crates" / "alpha";
+    (void)rivet::fs::create_dirs(member_dir);
+
+    auto ws_root = ws_dir / "rivet.toml";
+    std::string ws_text =
+        "[workspace]\n"
+        "members = [\"crates/alpha\"]\n"
+        "\n"
+        "[workspace.dependencies]\n"
+        "fmt = \"10.2\"\n";
+    (void)rivet::fs::write_atomic(ws_root,
+        rivet::ByteSpan{reinterpret_cast<const std::byte*>(ws_text.data()), ws_text.size()});
+
+    auto member_path = member_dir / "rivet.toml";
+    std::string member_text =
+        "[package]\n"
+        "name = \"alpha\"\n"
+        "version = \"0.1.0\"\n"
+        "\n"
+        "[dependencies]\n"
+        "fmt = { workspace = true }\n";
+    (void)rivet::fs::write_atomic(member_path,
+        rivet::ByteSpan{reinterpret_cast<const std::byte*>(member_text.data()), member_text.size()});
+
+    auto r = find_and_parse(member_dir);
+    ASSERT_TRUE(r.has_value()) << r.error().message;
+    EXPECT_EQ(r->name, "alpha");
+    EXPECT_EQ(r->workspace_root, ws_dir);
+
+    auto it = r->dependencies.find("fmt");
+    ASSERT_NE(it, r->dependencies.end());
+    EXPECT_TRUE(it->second.inherit_workspace);
+    EXPECT_EQ(it->second.version, "10.2");
+}
+
+TEST_F(ManifestTest, WorkspaceInheritanceMissingEntryErrors) {
+    auto ws_dir = tmp_dir / "ws_missing";
+    auto member_dir = ws_dir / "crates" / "alpha";
+    (void)rivet::fs::create_dirs(member_dir);
+
+    std::string ws_text =
+        "[workspace]\n"
+        "members = [\"crates/alpha\"]\n";
+    (void)rivet::fs::write_atomic(ws_dir / "rivet.toml",
+        rivet::ByteSpan{reinterpret_cast<const std::byte*>(ws_text.data()), ws_text.size()});
+
+    std::string member_text =
+        "[package]\n"
+        "name = \"alpha\"\n"
+        "version = \"0.1.0\"\n"
+        "\n"
+        "[dependencies]\n"
+        "fmt = { workspace = true }\n";
+    (void)rivet::fs::write_atomic(member_dir / "rivet.toml",
+        rivet::ByteSpan{reinterpret_cast<const std::byte*>(member_text.data()), member_text.size()});
+
+    auto r = find_and_parse(member_dir);
+    ASSERT_FALSE(r.has_value());
+    EXPECT_NE(r.error().message.find("workspace = true"), std::string::npos);
+    EXPECT_NE(r.error().message.find("fmt"),              std::string::npos);
+}
+
+TEST_F(ManifestTest, LockfilePathRoutesToWorkspaceRoot) {
+    Manifest m;
+    m.root_dir       = rivet::Path{"/some/ws/crates/x"};
+    m.workspace_root = rivet::Path{"/some/ws"};
+    EXPECT_EQ(lockfile_path_for(m), rivet::Path{"/some/ws/rivet.lock"});
+
+    Manifest standalone;
+    standalone.root_dir = rivet::Path{"/proj"};
+    EXPECT_EQ(lockfile_path_for(standalone), rivet::Path{"/proj/rivet.lock"});
+}
+
+TEST_F(ManifestTest, SerializeRoundTripsWorkspaceTrueForm) {
+    Manifest m;
+    m.name    = "x";
+    m.version = "0.1.0";
+    DepSpec spec;
+    spec.kind              = DepKind::Registry;
+    spec.inherit_workspace = true;
+    spec.version           = "10.2";  // already-substituted
+    m.dependencies["fmt"]  = std::move(spec);
+
+    auto text = serialize(m);
+    EXPECT_NE(text.find("fmt = { workspace = true }"), std::string::npos)
+        << "serialize() should round-trip the workspace inheritance form; text was:\n"
+        << text;
+    // The substituted version must NOT leak into the inline form.
+    EXPECT_EQ(text.find("fmt = \"10.2\""), std::string::npos);
+}
+
 TEST_F(ManifestTest, ParsesPerSourceCompileFlags) {
     auto path = write_toml(R"(
 [package]

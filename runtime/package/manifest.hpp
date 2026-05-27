@@ -32,6 +32,14 @@ struct DepSpec {
     // Feature flags:
     std::vector<std::string> features;
     bool static_link = false;
+
+    // Cargo-style inheritance: `dep.workspace = true` means "look up the
+    // version (and other fields) from the workspace root's
+    // [workspace.dependencies][name]". Resolved by find_and_parse() — once
+    // the manifest reaches the CLI, this flag has already been applied and
+    // the spec carries the real version. Surfaced here so tests + tooling
+    // can detect inheritance intent.
+    bool inherit_workspace = false;
 };
 
 // ─── Platform filter ──────────────────────────────────────────────────────────
@@ -177,7 +185,19 @@ struct Manifest {
 
     // Absolute path to the directory containing this rivet.toml.
     Path root_dir;
+
+    // If this manifest is a workspace member, the absolute path to the
+    // workspace root's directory (the dir holding the rivet.toml with the
+    // [workspace] block). Empty when the manifest is standalone or is
+    // itself the workspace root. Populated by find_and_parse().
+    Path workspace_root;
 };
+
+/// Path to the lockfile this manifest should read/write. Resolves to the
+/// workspace root's rivet.lock when the manifest is a workspace member,
+/// else the manifest's own dir. Use this everywhere you'd otherwise write
+/// `manifest.root_dir / "rivet.lock"`.
+[[nodiscard]] Path lockfile_path_for(const Manifest& m);
 
 // ─── Parsing ──────────────────────────────────────────────────────────────────
 

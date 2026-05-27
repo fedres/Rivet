@@ -182,6 +182,7 @@ Result<Manifest> parse_manifest(const Path& path) {
                         if (auto fs = fv.value<std::string>()) spec.features.push_back(*fs);
                 }
                 if (auto b = t->get_as<bool>("static")) spec.static_link = b->get();
+                if (auto b = t->get_as<bool>("workspace")) spec.inherit_workspace = b->get();
             }
             dest[name] = std::move(spec);
         }
@@ -390,13 +391,98 @@ Result<Manifest> parse_manifest(const Path& path) {
 
 // ─── find_and_parse() ─────────────────────────────────────────────────────────
 
+// Walk up from `member_dir` looking for a parent rivet.toml that declares
+// a [workspace] containing `member_dir` in its members[]. Returns the
+// workspace root dir + parsed root manifest if found.
+namespace {
+
+struct WorkspaceRootInfo {
+    Path     root_dir;
+    Manifest root_manifest;
+};
+
+std::optional<WorkspaceRootInfo>
+find_workspace_root_for(const Path& member_dir) {
+    auto norm = [](const Path& p) {
+        // weakly_canonical may touch the filesystem; fall back to
+        // lexically_normal on failure so missing-dir cases still work.
+        std::error_code ec;
+        Path c = std::filesystem::weakly_canonical(p, ec);
+        if (ec) return p.lexically_normal();
+        return c;
+    };
+    Path target = norm(member_dir);
+
+    Path dir = member_dir.parent_path();
+    while (true) {
+        Path candidate = dir / "rivet.toml";
+        if (rivet::fs::exists(candidate).value_or(false)) {
+            auto r = parse_manifest(candidate);
+            if (r && r->workspace.has_value()) {
+                for (const auto& m : r->workspace->members) {
+                    if (norm(dir / m) == target) {
+                        return WorkspaceRootInfo{dir, std::move(*r)};
+                    }
+                }
+            }
+        }
+        Path parent = dir.parent_path();
+        if (parent == dir) break;
+        dir = parent;
+    }
+    return std::nullopt;
+}
+
+// Substitute workspace-inherited deps in `m` against `ws`'s
+// [workspace.dependencies]. Returns an error if any inherited dep is not
+// declared at the workspace root (matches cargo's strict mode).
+Result<void> apply_workspace_inheritance(Manifest& m, const Manifest& ws) {
+    if (!ws.workspace.has_value()) return {};
+    const auto& wsdeps = ws.workspace->dependencies;
+    for (auto& [name, spec] : m.dependencies) {
+        if (!spec.inherit_workspace) continue;
+        auto it = wsdeps.find(name);
+        if (it == wsdeps.end()) {
+            return make_error<void>(std::format(
+                "dependency '{}' uses `workspace = true` but the workspace "
+                "root has no [workspace.dependencies].{} entry", name, name));
+        }
+        // Keep inherit_workspace true so serialize() round-trips the form.
+        // Pull every other field from the workspace pin.
+        bool keep_flag = true;
+        DepSpec merged = it->second;
+        if (!spec.features.empty()) {
+            // Member-level features extend the workspace's features.
+            for (const auto& f : spec.features) merged.features.push_back(f);
+        }
+        merged.inherit_workspace = keep_flag;
+        spec = std::move(merged);
+    }
+    return {};
+}
+
+} // namespace
+
 Result<Manifest> find_and_parse(const Path& start_dir) {
     Path dir = start_dir;
 
     while (true) {
         auto candidate = dir / "rivet.toml";
         if (rivet::fs::exists(candidate).value_or(false)) {
-            return parse_manifest(candidate);
+            auto r = parse_manifest(candidate);
+            if (!r) return r;
+
+            // If this manifest is itself a workspace root (has [workspace],
+            // no [package]) or a standalone package, no inheritance to do.
+            // Otherwise walk up to find a workspace that contains us.
+            if (auto ws = find_workspace_root_for(r->root_dir)) {
+                r->workspace_root = ws->root_dir;
+                if (auto inh = apply_workspace_inheritance(*r, ws->root_manifest);
+                    !inh) {
+                    return make_error<Manifest>(inh.error().message);
+                }
+            }
+            return r;
         }
 
         auto parent = dir.parent_path();
@@ -404,6 +490,10 @@ Result<Manifest> find_and_parse(const Path& start_dir) {
             return make_error<Manifest>("rivet.toml not found (searched up to filesystem root)");
         dir = parent;
     }
+}
+
+Path lockfile_path_for(const Manifest& m) {
+    return (m.workspace_root.empty() ? m.root_dir : m.workspace_root) / "rivet.lock";
 }
 
 // ─── validate() ──────────────────────────────────────────────────────────────
@@ -456,8 +546,16 @@ std::string serialize(const Manifest& m) {
     out += std::format("cxx_std = \"{}\"\n", m.build.cxx_std);
     if (!m.dependencies.empty()) {
         out += "\n[dependencies]\n";
-        for (const auto& [name, spec] : m.dependencies)
-            out += std::format("{} = \"{}\"\n", name, spec.version);
+        for (const auto& [name, spec] : m.dependencies) {
+            if (spec.inherit_workspace) {
+                // Round-trip the cargo-style inheritance form. The version
+                // field has been substituted by find_and_parse but we keep
+                // the inherit marker so re-serialize is faithful.
+                out += std::format("{} = {{ workspace = true }}\n", name);
+            } else {
+                out += std::format("{} = \"{}\"\n", name, spec.version);
+            }
+        }
     }
     return out;
 }
