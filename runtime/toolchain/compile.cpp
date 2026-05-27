@@ -53,13 +53,27 @@ static std::string opt_flag(build::OptLevel opt) {
 Result<build::CompileCommand> make_compile_command(const CompileJob& job,
                                                     const ToolchainInfo& tc) {
     build::CompileCommand cmd;
-    cmd.executable   = tc.clangpp().string();
+    // Dispatch on source extension: `.c` → C compiler (clang), everything
+    // else → C++ compiler (clang++). Without this the bundled clang++ drives
+    // C amalgamations (vendored sqlite, libzstd) as if they were C++, which
+    // breaks on K&R prototypes / typedef redefinitions / `register` use.
+    auto ext = job.source.extension().string();
+    bool is_c = (ext == ".c");
+    cmd.executable   = (is_c ? tc.clang() : tc.clangpp()).string();
     cmd.working_dir  = job.source.parent_path();
 
     auto& args = cmd.args;
 
-    // Standard language options.
-    args.push_back("-std=" + job.cxx_std);
+    // Standard language options. `-std=c++NN` is meaningless to clang in
+    // C mode — let .c sources go in with the toolchain default (C17 since
+    // clang-17), explicitly tag the compile as C/C++ via -x so a file with
+    // an unrecognised extension (e.g. .S, .cxx) still routes correctly.
+    if (is_c) {
+        args.push_back("-x"); args.push_back("c");
+    } else {
+        args.push_back("-x"); args.push_back("c++");
+        args.push_back("-std=" + job.cxx_std);
+    }
     args.push_back(opt_flag(job.opt));
     if (job.debug) args.push_back("-g");
     if (job.lto)   args.push_back("-flto=thin");
