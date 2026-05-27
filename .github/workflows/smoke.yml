@@ -86,6 +86,27 @@ jobs:
         if: runner.os == 'Windows'
         run: python tests/smoke/hello_fmt.py build/release/rivet.exe
 
+      # ── M1 acceptance: rivet builds itself from rivet.toml ─────────────
+      # The cmake-built rivet binary above takes its own rivet.toml at the
+      # repo root and produces a second rivet binary, without invoking cmake.
+      # Uses the toolchain already installed by the previous smoke step.
+      - name: M1 self-build (rivet builds rivet, Unix)
+        if: runner.os != 'Windows'
+        continue-on-error: ${{ matrix.allow_failure }}
+        env:
+          RIVET_HOME: ${{ runner.temp }}/rivet-self-home
+        run: |
+          mkdir -p "$RIVET_HOME"
+          # Reuse the toolchain that the smoke script already downloaded
+          # in its own tmpdir? It's gone now — install fresh here. Cheap
+          # because the bundle is cached at the runner-image level.
+          ./build/release/rivet toolchain install 19.1.7
+          ./build/release/rivet build
+          ls -la .rivet/build/debug/bin/rivet
+          # The newly-rivet-built rivet binary should respond to --version
+          # without crashing.
+          ./.rivet/build/debug/bin/rivet --version
+
       # ── Upload logs on failure ─────────────────────────────────────────
       - name: Upload artifacts on failure
         if: failure()
