@@ -220,6 +220,16 @@ Result<void> extract_tar_zst(const Path& archive,
 
     TarHeader hdr;
     int zero_blocks = 0;
+    // GNU `tar` emits a `'L'` (LongName) sentinel entry for any path that
+    // doesn't fit cleanly in the ustar name[100] + prefix[155] split. Its
+    // data is the *next* entry's full path (NUL-terminated). We saw this
+    // first on the macOS toolchain bundle: 58 of 1429 entries (libc++
+    // headers under include/c++/v1/__type_traits/, __algorithm/, etc.)
+    // were emitted as LongName + regular-entry pairs and silently dropped.
+    std::string pending_long_name;
+    // Same idea, different typeflag — for the `linkname[100]` field on
+    // hardlinks/symlinks. We don't materialise links, so we just clear it.
+    std::string pending_long_link;
 
     while (true) {
         size_t got = reader.read(reinterpret_cast<uint8_t*>(&hdr), TAR_BLOCK);
@@ -239,18 +249,53 @@ Result<void> extract_tar_zst(const Path& archive,
 
         uint64_t size = parse_octal(hdr.size, sizeof(hdr.size));
         uint64_t mode = parse_octal(hdr.mode, sizeof(hdr.mode));
-        std::string raw_path = combine_path(hdr);
-        std::string out_path = strip_components(raw_path, opts.strip_components);
 
         // Number of full data blocks to consume regardless of what we
         // decide to do with the entry — keeps the stream aligned.
         uint64_t blocks  = (size + TAR_BLOCK - 1) / TAR_BLOCK;
         uint64_t padding = blocks * TAR_BLOCK - size;
 
+        char tf = hdr.typeflag ? hdr.typeflag : '0';
+
+        // GNU LongName: data IS the next entry's path. Read it and stash.
+        if (tf == 'L') {
+            std::string path(size, '\0');
+            size_t pr = reader.read(reinterpret_cast<uint8_t*>(path.data()), size);
+            if (pr != size) {
+                return make_error("tar.zst: short read inside GNU LongName entry");
+            }
+            // Trim trailing NUL(s).
+            while (!path.empty() && path.back() == '\0') path.pop_back();
+            pending_long_name = std::move(path);
+            reader.skip(padding);
+            continue;
+        }
+        if (tf == 'K') {
+            // GNU LongLink — overrides linkname for the next entry. We
+            // don't process links, so just drain.
+            std::string link(size, '\0');
+            (void)reader.read(reinterpret_cast<uint8_t*>(link.data()), size);
+            while (!link.empty() && link.back() == '\0') link.pop_back();
+            pending_long_link = std::move(link);
+            reader.skip(padding);
+            continue;
+        }
+
+        std::string raw_path;
+        if (!pending_long_name.empty()) {
+            raw_path = std::move(pending_long_name);
+            pending_long_name.clear();
+        } else {
+            raw_path = combine_path(hdr);
+        }
+        // Discard any pending long link — we don't materialise links.
+        pending_long_link.clear();
+
+        std::string out_path = strip_components(raw_path, opts.strip_components);
+
         // Skip entries we don't represent: hardlinks (already
         // dereferenced upstream via cp -aL), symlinks, devices, pax
         // headers, and entries stripped to nothing by strip_components.
-        char tf = hdr.typeflag ? hdr.typeflag : '0';
         bool is_dir  = (tf == '5');
         bool is_file = (tf == '0' || tf == '\0' || tf == '7');
         if (out_path.empty() || (!is_dir && !is_file)) {
