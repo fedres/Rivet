@@ -224,6 +224,7 @@ add_library(rivet_runtime STATIC
     runtime/build/executor.cpp
     runtime/build/pkgconfig.cpp
     runtime/build/multi_target.cpp
+    runtime/build/cmake_drive.cpp
 
     # Cache layer
     runtime/cache/key.cpp

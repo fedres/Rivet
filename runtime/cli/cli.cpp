@@ -10,6 +10,7 @@
 #include "../build/scheduler.hpp"
 #include "../build/pkgconfig.hpp"
 #include "../build/multi_target.hpp"
+#include "../build/cmake_drive.hpp"
 #include "../toolchain/sdk.hpp"
 #include "../archive/tar_zst.hpp"
 #include "../cache/store.hpp"
@@ -195,11 +196,63 @@ int cmd_build(const Context& ctx) {
     // unrelated rivet.toml on the way to the filesystem root.
     Path cwd = std::filesystem::current_path();
 
-    // 1. Find and parse the manifest.
+    // 1. Find and parse the manifest. If no rivet.toml exists but a
+    // CMakeLists.txt is present in cwd, fall back to the cmake-driving
+    // path (M2 first cut) so users can `git clone` an existing CMake
+    // project and `rivet build` it directly.
     auto manifest_r = rivet::pkg::find_and_parse(cwd);
     if (!manifest_r) {
+        if (rivet::fs::exists(cwd / "CMakeLists.txt").value_or(false)) {
+            // Need toolchain + SDK detection for the cmake path too.
+            auto home_r = rivet::env::rivet_home();
+            if (!home_r) {
+                std::cerr << "error: cannot determine rivet home: "
+                          << home_r.error().message << "\n";
+                return 1;
+            }
+            auto tc_r = rivet::toolchain::find_active(*home_r);
+            if (!tc_r) {
+                std::cerr << "error: no toolchain available: "
+                          << tc_r.error().message << "\n"
+                          << "hint: run 'rivet toolchain install <version>'.\n";
+                return 1;
+            }
+            if (const auto& sdk = rivet::toolchain::detect_host_sdk(); !sdk.present) {
+                std::cerr << "error: platform SDK not detected.\n\n"
+                          << sdk.hint << "\n";
+                return 1;
+            }
+
+            std::string profile_name{flag_value(args, "--profile").value_or("debug")};
+            rivet::build::CmakeDriveOptions copts;
+            copts.project_dir    = cwd;
+            copts.toolchain_root = tc_r->root;
+            copts.profile        = profile_name;
+            // Auto-pick the per-project install tree at <rivet_home>/
+            // cache/deps/<dir-name>/vcpkg-installed/<triplet> if present —
+            // populated by `rivet add` / `rivet fetch` ahead of this step.
+            // We don't have a manifest.name; use the dir's filename.
+            auto proj = cwd.filename().string();
+            if (!proj.empty()) {
+                Path candidate = *home_r / "cache" / "deps" / proj
+                                / "vcpkg-installed" / rivet::pkg::host_vcpkg_triplet();
+                if (rivet::fs::exists(candidate).value_or(false))
+                    copts.extra_prefix = candidate;
+            }
+            std::cout << std::format(
+                "no rivet.toml found; driving cmake with bundled "
+                "clang {} + ninja under {}\n",
+                tc_r->version, (cwd / ".rivet" / "cmake").string());
+            auto r = rivet::build::build_via_cmake(copts, *tc_r);
+            if (!r) {
+                std::cerr << "error: " << r.error().message << "\n";
+                return 1;
+            }
+            return 0;
+        }
         std::cerr << "error: " << manifest_r.error().message << "\n"
-                  << "hint: create a rivet.toml in this directory or a parent.\n";
+                  << "hint: create a rivet.toml in this directory or a parent,\n"
+                  << "      or run from a directory containing a CMakeLists.txt.\n";
         return 1;
     }
     const auto& manifest = *manifest_r;
