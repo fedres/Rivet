@@ -111,6 +111,59 @@ else()
     set(_RIVET_HAVE_SQLITE FALSE)
 endif()
 
+# ─── Vendored libzstd (decompressor) ─────────────────────────────────────────
+# Same pattern as SQLite — download the upstream source on first configure,
+# stash the `lib/{common,decompress,zstd.h}` subset under vendor/zstd/. We
+# only need decompress (not compress) because the use cases that read .tar.zst
+# (toolchain install, self-update) are far more frequent than the ones that
+# write it (rivet publish, which still shells `tar --zstd -cf`).
+if(RIVET_VENDOR_FETCH AND NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/zstd/zstd.h")
+    set(_ZSTD_VERSION "1.5.6")
+    set(_ZSTD_URL "https://github.com/facebook/zstd/archive/refs/tags/v${_ZSTD_VERSION}.tar.gz")
+    set(_ZSTD_TGZ "${CMAKE_BINARY_DIR}/_rivet_zstd.tar.gz")
+    set(_ZSTD_EXTRACT_DIR "${CMAKE_BINARY_DIR}/_rivet_zstd_extract")
+    message(STATUS "Downloading libzstd ${_ZSTD_VERSION} from ${_ZSTD_URL}")
+    file(DOWNLOAD "${_ZSTD_URL}" "${_ZSTD_TGZ}"
+         STATUS _ZSTD_DL_STATUS
+         TLS_VERIFY ON
+         SHOW_PROGRESS)
+    list(GET _ZSTD_DL_STATUS 0 _ZSTD_DL_CODE)
+    if(_ZSTD_DL_CODE EQUAL 0)
+        file(MAKE_DIRECTORY "${_ZSTD_EXTRACT_DIR}")
+        file(ARCHIVE_EXTRACT
+            INPUT "${_ZSTD_TGZ}"
+            DESTINATION "${_ZSTD_EXTRACT_DIR}")
+        file(MAKE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/vendor/zstd")
+        # Copy zstd.h (public API) and the common+decompress source trees.
+        file(GLOB _ZSTD_HDRS
+            "${_ZSTD_EXTRACT_DIR}/zstd-${_ZSTD_VERSION}/lib/zstd.h"
+            "${_ZSTD_EXTRACT_DIR}/zstd-${_ZSTD_VERSION}/lib/zstd_errors.h")
+        foreach(_f ${_ZSTD_HDRS})
+            file(COPY "${_f}" DESTINATION "${CMAKE_CURRENT_SOURCE_DIR}/vendor/zstd")
+        endforeach()
+        foreach(_sub common decompress)
+            file(GLOB _ZSTD_SRC
+                "${_ZSTD_EXTRACT_DIR}/zstd-${_ZSTD_VERSION}/lib/${_sub}/*.c"
+                "${_ZSTD_EXTRACT_DIR}/zstd-${_ZSTD_VERSION}/lib/${_sub}/*.h"
+                "${_ZSTD_EXTRACT_DIR}/zstd-${_ZSTD_VERSION}/lib/${_sub}/*.S")
+            file(MAKE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/vendor/zstd/${_sub}")
+            foreach(_f ${_ZSTD_SRC})
+                file(COPY "${_f}" DESTINATION "${CMAKE_CURRENT_SOURCE_DIR}/vendor/zstd/${_sub}")
+            endforeach()
+        endforeach()
+        message(STATUS "Vendored libzstd → vendor/zstd/")
+    else()
+        list(GET _ZSTD_DL_STATUS 1 _ZSTD_DL_MSG)
+        message(WARNING "libzstd download failed: ${_ZSTD_DL_MSG}; archive extraction will fall back to host `tar --zstd`")
+    endif()
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/zstd/zstd.h")
+    set(_RIVET_HAVE_ZSTD TRUE)
+else()
+    set(_RIVET_HAVE_ZSTD FALSE)
+endif()
+
 # ─── Platform Abstraction Layer ───────────────────────────────────────────────
 
 add_library(rivet_pal STATIC
@@ -213,6 +266,27 @@ if(_RIVET_HAVE_SQLITE)
     )
     if(NOT MSVC)
         set_source_files_properties(vendor/sqlite/sqlite3.c PROPERTIES
+            COMPILE_FLAGS "-Wno-all -Wno-extra -Wno-pedantic")
+    endif()
+endif()
+
+if(_RIVET_HAVE_ZSTD)
+    file(GLOB _ZSTD_COMMON_SRC CONFIGURE_DEPENDS vendor/zstd/common/*.c)
+    file(GLOB _ZSTD_DECOMP_SRC CONFIGURE_DEPENDS vendor/zstd/decompress/*.c)
+    target_sources(rivet_runtime PRIVATE
+        ${_ZSTD_COMMON_SRC}
+        ${_ZSTD_DECOMP_SRC}
+        runtime/archive/tar_zst.cpp
+    )
+    target_include_directories(rivet_runtime PRIVATE vendor/zstd)
+    target_compile_definitions(rivet_runtime PRIVATE
+        RIVET_HAVE_ZSTD=1
+        ZSTD_DISABLE_ASM=1    # avoid huf_decompress_amd64.S — keep build simple
+    )
+    if(NOT MSVC)
+        # zstd's own headers/sources use plenty of casts and shadow warnings.
+        # Silence them here without disabling warnings project-wide.
+        set_source_files_properties(${_ZSTD_COMMON_SRC} ${_ZSTD_DECOMP_SRC} PROPERTIES
             COMPILE_FLAGS "-Wno-all -Wno-extra -Wno-pedantic")
     endif()
 endif()

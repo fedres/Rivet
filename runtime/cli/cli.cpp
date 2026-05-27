@@ -10,6 +10,7 @@
 #include "../build/scheduler.hpp"
 #include "../build/pkgconfig.hpp"
 #include "../toolchain/sdk.hpp"
+#include "../archive/tar_zst.hpp"
 #include "../cache/store.hpp"
 #include "../cache/key.hpp"
 #include "../package/manifest.hpp"
@@ -1410,33 +1411,20 @@ int cmd_toolchain(const Context& ctx) {
             return 1;
         }
 
-        // Extract archive.
+        // Extract archive (in-process via vendored libzstd — no host
+        // `zstd` / `tar` prereq).
         if (auto r = rivet::fs::create_dirs(tc_dir); !r) {
             std::cerr << "error: " << r.error().message << "\n";
             (void)rivet::fs::remove_file(tmp_archive);
             return 1;
         }
 
-        rivet::process::SpawnOptions tar_opts;
-        tar_opts.args = {"tar", "--zstd", "-xf", tmp_archive.string(),
-                         "-C", tc_dir.string(), "--strip-components=1"};
-        tar_opts.inherit_env     = true;
-        tar_opts.capture_stdout  = false;
-        tar_opts.capture_stderr  = true;
-
-        auto child_r = rivet::process::spawn(std::move(tar_opts));
-        if (!child_r) {
-            (void)rivet::fs::remove_file(tmp_archive);
-            std::cerr << "error: extraction failed: " << child_r.error().message << "\n";
-            return 1;
-        }
-
-        auto wait_r = child_r->wait();
+        rivet::archive::ExtractOptions xopts;
+        xopts.strip_components = 1;
+        auto ex = rivet::archive::extract_tar_zst(tmp_archive, tc_dir, xopts);
         (void)rivet::fs::remove_file(tmp_archive);
-        if (!wait_r || *wait_r != 0) {
-            std::cerr << std::format("error: extraction failed (exit {})\n",
-                wait_r.value_or(-1));
-            std::cerr << child_r->stderr_output() << "\n";
+        if (!ex) {
+            std::cerr << "error: extraction failed: " << ex.error().message << "\n";
             return 1;
         }
 
@@ -1713,36 +1701,29 @@ int cmd_self_update(const Context& /*ctx*/) {
         return 1;
     }
 
-    // Extract the new binary to a temp path next to the running binary.
-    auto tmp_bin = rivet::fs::temp_path_near(*self_r);
+    // Extract the new binary (via vendored libzstd — no host `tar`/`zstd`
+    // prereq). The bundle layout is `rivet-<ver>-<triple>/bin/rivet`; we
+    // strip the top dir and pluck out bin/rivet via a staging dir.
+    auto tmp_dir = rivet::fs::temp_path_near(*self_r);
+    (void)rivet::fs::create_dirs(tmp_dir);
 
-    rivet::process::SpawnOptions tar_opts;
-    tar_opts.args = {"tar", "--zstd", "-xOf", tmp_archive.string(), "bin/rivet"};
-    tar_opts.inherit_env    = true;
-    tar_opts.capture_stdout = true;
-    tar_opts.capture_stderr = true;
-
-    auto child_r = rivet::process::spawn(std::move(tar_opts));
-    if (!child_r) {
-        (void)rivet::fs::remove_file(tmp_archive);
-        std::cerr << "error: extraction failed: " << child_r.error().message << "\n";
-        return 1;
-    }
-
-    // Write the extracted binary bytes atomically next to the running exe.
-    auto wait_r = child_r->wait();
+    rivet::archive::ExtractOptions xopts;
+    xopts.strip_components = 1;
+    auto ex = rivet::archive::extract_tar_zst(tmp_archive, tmp_dir, xopts);
     (void)rivet::fs::remove_file(tmp_archive);
-    if (!wait_r || *wait_r != 0) {
-        std::cerr << std::format("error: tar exited {}\n", wait_r.value_or(-1));
+    if (!ex) {
+        (void)rivet::fs::remove_all(tmp_dir);
+        std::cerr << "error: extraction failed: " << ex.error().message << "\n";
         return 1;
     }
 
-    auto stdout_bytes = child_r->stdout_output();
-    auto bin_bytes    = rivet::ByteSpan{
-        reinterpret_cast<const std::byte*>(stdout_bytes.data()), stdout_bytes.size()};
-
-    if (auto wr = rivet::fs::write_atomic(tmp_bin, bin_bytes); !wr) {
-        std::cerr << "error: could not write new binary: " << wr.error().message << "\n";
+    auto tmp_bin = tmp_dir / "bin" / "rivet";
+#if defined(_WIN32)
+    tmp_bin += ".exe";
+#endif
+    if (!rivet::fs::exists(tmp_bin).value_or(false)) {
+        (void)rivet::fs::remove_all(tmp_dir);
+        std::cerr << "error: extracted bundle missing bin/rivet\n";
         return 1;
     }
 

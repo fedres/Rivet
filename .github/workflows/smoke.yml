@@ -59,13 +59,13 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
             cmake ninja-build gcc-13 g++-13 clang-14 \
-            libseccomp-dev libssl-dev zstd
+            libseccomp-dev libssl-dev
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100 \
             --slave /usr/bin/g++ g++ /usr/bin/g++-13
 
       - name: Install build deps (macOS)
         if: runner.os == 'macOS'
-        run: brew install cmake ninja zstd
+        run: brew install cmake ninja
 
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
