@@ -165,3 +165,132 @@ TEST_F(ManifestTest, LockfileWriteAndRead) {
     EXPECT_EQ(rd->packages[0].version,  "2.0.0");
     EXPECT_EQ(rd->packages[0].checksum, "deadbeef");
 }
+
+// ─── Multi-target schema (M1: rivet-self-build) ──────────────────────────────
+
+TEST_F(ManifestTest, ParsesMultiTargetSchema) {
+    auto path = write_toml(R"(
+[package]
+name = "rivet"
+version = "0.1.0"
+
+[[lib]]
+name = "rivet_pal"
+sources = ["platform/common/types.cpp"]
+include_dirs = [".", "platform/common"]
+
+[[lib]]
+name = "rivet_runtime"
+sources = ["runtime/package/manifest.cpp", "runtime/build/graph.cpp"]
+depends_on = ["rivet_pal"]
+defines = ["RIVET_VERSION=\"0.1.0\""]
+
+[[bin]]
+name = "rivet"
+path = "runtime/main.cpp"
+depends_on = ["rivet_runtime"]
+
+[[test]]
+name = "test_manifest"
+path = "tests/unit/test_manifest.cpp"
+depends_on = ["rivet_runtime"]
+
+[[vendor]]
+name = "sqlite"
+sources = ["vendor/sqlite/sqlite3.c"]
+compile_flags = ["-Wno-all", "-Wno-extra"]
+defines = ["SQLITE_THREADSAFE=1"]
+)");
+    auto r = parse_manifest(path);
+    ASSERT_TRUE(r.has_value()) << r.error().message;
+    EXPECT_EQ(r->name, "rivet");
+    ASSERT_EQ(r->targets.size(), 5u);
+
+    EXPECT_EQ(r->targets[0].kind, TargetKind::Lib);
+    EXPECT_EQ(r->targets[0].name, "rivet_pal");
+    ASSERT_EQ(r->targets[0].sources.size(), 1u);
+    EXPECT_EQ(r->targets[0].sources[0], "platform/common/types.cpp");
+    ASSERT_EQ(r->targets[0].include_dirs.size(), 2u);
+
+    EXPECT_EQ(r->targets[1].kind, TargetKind::Lib);
+    EXPECT_EQ(r->targets[1].name, "rivet_runtime");
+    ASSERT_EQ(r->targets[1].depends_on.size(), 1u);
+    EXPECT_EQ(r->targets[1].depends_on[0], "rivet_pal");
+    ASSERT_EQ(r->targets[1].defines.size(), 1u);
+
+    EXPECT_EQ(r->targets[2].kind, TargetKind::Bin);
+    EXPECT_EQ(r->targets[2].name, "rivet");
+    EXPECT_EQ(r->targets[2].path, "runtime/main.cpp");
+
+    EXPECT_EQ(r->targets[3].kind, TargetKind::Test);
+    EXPECT_EQ(r->targets[3].name, "test_manifest");
+
+    EXPECT_EQ(r->targets[4].kind, TargetKind::Vendor);
+    EXPECT_EQ(r->targets[4].name, "sqlite");
+    ASSERT_EQ(r->targets[4].compile_flags.size(), 2u);
+}
+
+TEST_F(ManifestTest, ParsesCfgConditionalSources) {
+    auto path = write_toml(R"(
+[package]
+name = "demo"
+version = "0.1.0"
+
+[[lib]]
+name = "demo_pal"
+sources = ["platform/common/types.cpp"]
+
+[[lib.cfg]]
+os = "linux"
+sources = ["platform/linux/fs.cpp", "platform/linux/process.cpp"]
+
+[[lib.cfg]]
+os = "macos"
+sources = ["platform/macos/fs.cpp"]
+link_libs = ["-framework", "CoreFoundation"]
+
+[[lib.cfg]]
+os = "windows"
+sources = ["platform/windows/fs.cpp"]
+link_libs = ["ws2_32.lib"]
+)");
+    auto r = parse_manifest(path);
+    ASSERT_TRUE(r.has_value()) << r.error().message;
+    ASSERT_EQ(r->targets.size(), 1u);
+    const auto& t = r->targets[0];
+    ASSERT_EQ(t.cfg_overrides.size(), 3u);
+
+    EXPECT_EQ(t.cfg_overrides[0].cfg.os, "linux");
+    EXPECT_EQ(t.cfg_overrides[0].extra_sources.size(), 2u);
+
+    EXPECT_EQ(t.cfg_overrides[1].cfg.os, "macos");
+    ASSERT_EQ(t.cfg_overrides[1].extra_link_libs.size(), 2u);
+    EXPECT_EQ(t.cfg_overrides[1].extra_link_libs[0], "-framework");
+
+    EXPECT_EQ(t.cfg_overrides[2].cfg.os, "windows");
+}
+
+TEST_F(ManifestTest, ParsesPerSourceCompileFlags) {
+    auto path = write_toml(R"(
+[package]
+name = "demo"
+version = "0.1.0"
+
+[[vendor]]
+name = "sqlite"
+sources = ["vendor/sqlite/sqlite3.c"]
+
+[vendor.per_source_flags]
+"vendor/sqlite/sqlite3.c" = ["-Wno-all", "-Wno-extra"]
+)");
+    auto r = parse_manifest(path);
+    ASSERT_TRUE(r.has_value()) << r.error().message;
+    ASSERT_EQ(r->targets.size(), 1u);
+    const auto& t = r->targets[0];
+    EXPECT_EQ(t.kind, TargetKind::Vendor);
+    ASSERT_EQ(t.per_source_flags.size(), 1u);
+    auto it = t.per_source_flags.find("vendor/sqlite/sqlite3.c");
+    ASSERT_NE(it, t.per_source_flags.end());
+    ASSERT_EQ(it->second.size(), 2u);
+    EXPECT_EQ(it->second[0], "-Wno-all");
+}

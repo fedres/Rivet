@@ -67,6 +67,51 @@ struct Profile {
     std::vector<std::string> extra_flags;
 };
 
+// ─── Targets (M1: multi-artefact projects, e.g. rivet itself) ────────────────
+//
+// One rivet.toml can declare multiple build targets — static libraries,
+// executables, tests, and vendored C sources — each with its own source
+// list, include paths, compile/link flags, and dependencies on other
+// targets in the same manifest.
+//
+// Single-binary projects don't need any of this: their `src/` tree is
+// auto-discovered and the binary is named after the package. Projects
+// like rivet itself (3 libs + 1 binary + ~12 tests + 2 vendored amalgs)
+// declare each artefact explicitly via [[lib]] / [[bin]] / [[test]] /
+// [[vendor]].
+
+enum class TargetKind { Lib, Bin, Test, Vendor };
+
+// Cargo-style target.cfg gate. Today we honour just `os = "linux"|"macos"|
+// "windows"`. Negation and conjunctions are not implemented yet.
+struct CfgPredicate {
+    std::optional<std::string> os;   // "linux" / "macos" / "windows"
+};
+
+struct TargetCfgOverride {
+    CfgPredicate                    cfg;
+    std::vector<std::string>        extra_sources;
+    std::vector<std::string>        extra_link_libs;
+    std::vector<std::string>        extra_compile_flags;
+};
+
+struct Target {
+    TargetKind                          kind = TargetKind::Bin;
+    std::string                         name;
+    std::string                         path;             // entry-point file (bins/tests only)
+    std::vector<std::string>            sources;          // explicit list / globs
+    std::vector<std::string>            include_dirs;
+    std::vector<std::string>            depends_on;       // other intra-manifest target names
+    std::vector<std::string>            compile_flags;
+    std::vector<std::string>            link_libs;        // raw -l/.lib tokens
+    std::vector<std::string>            defines;
+    // Per-source compile-flag overrides. Key is a path (relative to root)
+    // OR a glob. Used for vendored C amalgamations needing -Wno-all etc.
+    std::unordered_map<std::string, std::vector<std::string>> per_source_flags;
+    // cfg-conditional add-ons, evaluated against host triple at build time.
+    std::vector<TargetCfgOverride>      cfg_overrides;
+};
+
 // ─── Package manifest (top-level rivet.toml) ─────────────────────────────────
 
 struct Manifest {
@@ -101,6 +146,10 @@ struct Manifest {
     // Commands are executed by the shell with the manifest dir as CWD and
     // <rivet_home>/bin prepended to PATH (so dep binaries are reachable).
     std::unordered_map<std::string, std::string> scripts;
+
+    // [[lib]], [[bin]], [[test]], [[vendor]] arrays. Empty when the
+    // manifest is a single-binary project that relies on src/-scanning.
+    std::vector<Target> targets;
 
     // Absolute path to the directory containing this rivet.toml.
     Path root_dir;

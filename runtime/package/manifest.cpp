@@ -195,6 +195,85 @@ Result<Manifest> parse_manifest(const Path& path) {
                 m.scripts[std::string{k.str()}] = *s;
     }
 
+    // ─── [[lib]], [[bin]], [[test]], [[vendor]] — multi-target schema ──────
+    //
+    // Each is an array-of-tables with the same shape:
+    //   name              required for libs/bins/tests; defaults to basename(path) for bins
+    //   path              entry-point source (bins/tests only)
+    //   sources           explicit list of source files (libs/vendor; optional for bins)
+    //   include_dirs      compile -I paths, evaluated relative to root_dir
+    //   depends_on        list of intra-manifest target names
+    //   compile_flags     extra clang flags for every source in this target
+    //   link_libs         extra raw link tokens (-l..., framework names, etc.)
+    //   defines           list of "FOO=1" tokens → emitted as -DFOO=1
+    //   per_source_flags  table mapping path/glob → list of clang flags
+    //   cfg               array of per-platform overrides — see CfgPredicate
+    auto parse_string_array = [](const toml::table& t, const char* key,
+                                  std::vector<std::string>& out) {
+        if (auto* a = t.get_as<toml::array>(key)) {
+            for (const auto& v : *a)
+                if (auto s = v.value<std::string>()) out.push_back(*s);
+        }
+    };
+    auto parse_target = [&](const toml::table& t, TargetKind kind) -> Target {
+        Target tgt;
+        tgt.kind = kind;
+        tgt.name = str_of(&t, "name");
+        tgt.path = str_of(&t, "path");
+        if (tgt.name.empty() && !tgt.path.empty()) {
+            auto stem = Path{tgt.path}.stem().string();
+            if (!stem.empty()) tgt.name = stem;
+        }
+        parse_string_array(t, "sources",       tgt.sources);
+        parse_string_array(t, "include_dirs",  tgt.include_dirs);
+        parse_string_array(t, "depends_on",    tgt.depends_on);
+        parse_string_array(t, "compile_flags", tgt.compile_flags);
+        parse_string_array(t, "link_libs",     tgt.link_libs);
+        parse_string_array(t, "defines",       tgt.defines);
+
+        if (auto* psf = t.get_as<toml::table>("per_source_flags")) {
+            for (const auto& [k, v] : *psf) {
+                std::vector<std::string> flags;
+                if (auto* arr = v.as_array()) {
+                    for (const auto& fv : *arr)
+                        if (auto s = fv.value<std::string>()) flags.push_back(*s);
+                } else if (auto s = v.value<std::string>()) {
+                    flags.push_back(*s);
+                }
+                tgt.per_source_flags[std::string{k.str()}] = std::move(flags);
+            }
+        }
+
+        // [target.<name>.cfg] is conceptually a list of override tables.
+        // We support both inline arrays and the more readable per-section
+        // form via `[[<kind>.cfg]]` style.
+        if (auto* cfgs = t.get_as<toml::array>("cfg")) {
+            for (const auto& cv : *cfgs) {
+                auto* ct = cv.as_table();
+                if (!ct) continue;
+                TargetCfgOverride ov;
+                if (auto os_str = str_of(ct, "os"); !os_str.empty()) ov.cfg.os = os_str;
+                parse_string_array(*ct, "sources",       ov.extra_sources);
+                parse_string_array(*ct, "link_libs",     ov.extra_link_libs);
+                parse_string_array(*ct, "compile_flags", ov.extra_compile_flags);
+                tgt.cfg_overrides.push_back(std::move(ov));
+            }
+        }
+        return tgt;
+    };
+    auto parse_target_array = [&](const char* key, TargetKind kind) {
+        if (auto* arr = tbl.get_as<toml::array>(key)) {
+            for (const auto& v : *arr) {
+                if (auto* t = v.as_table())
+                    m.targets.push_back(parse_target(*t, kind));
+            }
+        }
+    };
+    parse_target_array("lib",    TargetKind::Lib);
+    parse_target_array("bin",    TargetKind::Bin);
+    parse_target_array("test",   TargetKind::Test);
+    parse_target_array("vendor", TargetKind::Vendor);
+
     if (auto* profiles = tbl.get_as<toml::table>("profiles")) {
         for (const auto& [k, v] : *profiles) {
             auto* prof_tbl = v.as_table();
