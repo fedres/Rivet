@@ -78,33 +78,43 @@ std::string make_toolchain_text(const toolchain::ToolchainInfo& tc,
             "list(PREPEND CMAKE_PREFIX_PATH \"{}\")\n", path(extra_prefix));
     }
 
-    // find_package interception. Every TOP-LEVEL find_package() call from
-    // the user's CMakeLists is logged to <build_dir>/rivet-find-package.log.
-    // After configure, rivet reads it and surfaces a list of packages the
-    // project asked for — useful both for diagnosing "what do I need to
-    // `rivet add`?" and for the future `rivet add --from-find-package`
-    // bulk-import flow.
-    //
-    // Recursion guard: when our override calls `_find_package`, that may
-    // dive through internal CMake modules that themselves use
-    // find_package(...) (e.g. CheckCXXCompilerFlag, Threads probing).
-    // Without the guard `_find_package` re-enters our macro and CMake
-    // hits its 1000-depth recursion limit. The `RIVET_IN_FIND_PACKAGE`
-    // flag scopes logging to outer calls only.
-    text +=
-        "macro(find_package _rivet_pkg)\n"
-        "    if(NOT DEFINED RIVET_IN_FIND_PACKAGE)\n"
-        "        set(RIVET_IN_FIND_PACKAGE TRUE)\n"
-        "        file(APPEND \"${CMAKE_BINARY_DIR}/rivet-find-package.log\"\n"
-        "             \"${_rivet_pkg}\\n\")\n"
-        "        _find_package(${ARGV})\n"
-        "        unset(RIVET_IN_FIND_PACKAGE)\n"
-        "    else()\n"
-        "        _find_package(${ARGV})\n"
-        "    endif()\n"
-        "endmacro()\n";
+    // (Earlier we tried overriding find_package via a macro to log every
+    // call. CMake's nested-macro scoping made the recursion guard
+    // unreliable — internal find_package calls from CheckCXXCompilerFlag
+    // and friends still tripped the 1000-depth limit. We now scrape the
+    // cmake configure output for `Could NOT find <Pkg>` patterns instead;
+    // see scan_configure_output() below.)
 
     return text;
+}
+
+// Match cmake's "Could NOT find X" or "Found X" status lines and pull
+// out the package name. Stable enough — these strings have been part of
+// FindPackageHandleStandardArgs for >15 years.
+std::vector<std::string> scan_configure_output(const std::string& out) {
+    std::vector<std::string> missing;
+    std::unordered_set<std::string> seen;
+
+    size_t pos = 0;
+    while (pos < out.size()) {
+        size_t nl = out.find('\n', pos);
+        std::string_view line(out.data() + pos,
+            (nl == std::string::npos ? out.size() : nl) - pos);
+        pos = (nl == std::string::npos ? out.size() : nl + 1);
+
+        // Status format: "-- Could NOT find <Pkg> (missing: ...)"
+        constexpr std::string_view k = "Could NOT find ";
+        auto k_idx = line.find(k);
+        if (k_idx == std::string_view::npos) continue;
+        auto rest = line.substr(k_idx + k.size());
+        // Pkg name ends at first space or `(`.
+        auto end = rest.find_first_of(" (");
+        std::string name = std::string(end == std::string_view::npos
+            ? rest : rest.substr(0, end));
+        if (!name.empty() && seen.insert(name).second)
+            missing.push_back(std::move(name));
+    }
+    return missing;
 }
 
 int spawn_and_wait(rivet::process::SpawnOptions opts, std::string_view label) {
@@ -116,6 +126,29 @@ int spawn_and_wait(rivet::process::SpawnOptions opts, std::string_view label) {
     }
     auto code = child->wait();
     return code.value_or(-1);
+}
+
+// Run + return both exit code and a stdout snapshot. Used for the
+// configure step so we can scrape `Could NOT find ...` hints after.
+struct RunCaptured {
+    int          exit_code;
+    std::string  stdout_;
+};
+RunCaptured spawn_capture(rivet::process::SpawnOptions opts, std::string_view label) {
+    std::cout << "$ " << label << "\n";
+    opts.capture_stdout = true;
+    opts.capture_stderr = false;
+    auto child = rivet::process::spawn(std::move(opts));
+    if (!child) {
+        std::cerr << "error: " << child.error().message << "\n";
+        return {-1, {}};
+    }
+    auto code = child->wait();
+    std::string out = child->stdout_output();
+    // Echo captured stdout to our stdout so the user still sees cmake's
+    // progress lines; matters for slow configures.
+    std::cout << out;
+    return {code.value_or(-1), std::move(out)};
 }
 
 } // namespace
@@ -155,8 +188,18 @@ Result<void> build_via_cmake(const CmakeDriveOptions& opts,
     cfg.capture_stdout = false;
     cfg.capture_stderr = false;
 
-    if (int rc = spawn_and_wait(std::move(cfg), "cmake configure"); rc != 0)
-        return make_error("cmake configure failed (exit " + std::to_string(rc) + ")");
+    auto cfg_result = spawn_capture(std::move(cfg), "cmake configure");
+    if (cfg_result.exit_code != 0) {
+        // If the failure was a missing find_package, surface it before bailing.
+        auto missing = scan_configure_output(cfg_result.stdout_);
+        if (!missing.empty()) {
+            std::cerr << "\n  cmake reported missing packages:\n";
+            for (const auto& m : missing)
+                std::cerr << "    - " << m << "  (try: rivet add " << m << ")\n";
+        }
+        return make_error("cmake configure failed (exit "
+                          + std::to_string(cfg_result.exit_code) + ")");
+    }
 
     // ── cmake --build ──────────────────────────────────────────────────
     rivet::process::SpawnOptions build;
@@ -167,30 +210,14 @@ Result<void> build_via_cmake(const CmakeDriveOptions& opts,
     if (int rc = spawn_and_wait(std::move(build), "cmake build"); rc != 0)
         return make_error("cmake build failed (exit " + std::to_string(rc) + ")");
 
-    // Surface find_package() hits the user's CMakeLists requested.
-    // Helps the "I cloned a cmake project — what do I need to rivet add?"
-    // question without forcing the user to grep cmake's stderr.
-    Path fp_log = build_dir / "rivet-find-package.log";
-    if (auto bytes = rivet::fs::read_file(fp_log)) {
-        std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
-        std::unordered_set<std::string> seen;
-        std::vector<std::string> uniq;
-        size_t pos = 0;
-        while (pos < text.size()) {
-            size_t nl = text.find('\n', pos);
-            std::string line(text.substr(pos, (nl == std::string_view::npos ? text.size() : nl) - pos));
-            // Strip CR (Windows) + whitespace.
-            while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
-                line.pop_back();
-            if (!line.empty() && seen.insert(line).second) uniq.push_back(line);
-            if (nl == std::string_view::npos) break;
-            pos = nl + 1;
-        }
-        if (!uniq.empty()) {
-            std::cout << "\n  find_package() requests this project made:\n";
-            for (const auto& p : uniq)
-                std::cout << "    - " << p << "  (try: rivet add " << p << ")\n";
-        }
+    // Even on success, surface any packages cmake reported as missing
+    // — those are the ones the user should `rivet add` to fully cover
+    // the project's find_package() calls.
+    auto missing = scan_configure_output(cfg_result.stdout_);
+    if (!missing.empty()) {
+        std::cout << "\n  cmake reported missing packages (build may have used fallbacks):\n";
+        for (const auto& m : missing)
+            std::cout << "    - " << m << "  (try: rivet add " << m << ")\n";
     }
 
     std::cout << "\n  Build dir: " << build_dir.string() << "\n";
