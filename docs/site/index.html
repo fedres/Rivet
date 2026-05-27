@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Rivet — a self-contained C++ build system</title>
+    <meta name="description" content="Cargo for C++. Bundled LLVM toolchain, vcpkg as a backend, multi-target manifests, self-hosting. One-line install on Linux, macOS, Windows.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="scanlines"></div>
+    <div class="glow-bg"></div>
+
+    <nav class="topbar">
+        <a class="brand" href="/Rivet/">
+            <span class="brand-prompt">$</span>
+            <span class="brand-name">rivet</span>
+            <span class="brand-cursor">_</span>
+        </a>
+        <div class="nav-links">
+            <a href="book/getting-started.html">Quick Start</a>
+            <a href="book/manifest.html">Manifest</a>
+            <a href="book/cli.html">CLI</a>
+            <a href="book/">Docs</a>
+            <a href="https://github.com/fedres/Rivet/releases/latest" class="nav-pill">v0.2.0 ↗</a>
+            <a href="https://github.com/fedres/Rivet" class="nav-pill">GitHub ↗</a>
+        </div>
+    </nav>
+
+    <main class="hero">
+        <h1 class="title">
+            <span class="t-bracket">[</span>rivet<span class="t-bracket">]</span>
+        </h1>
+        <p class="tagline">
+            cargo for C++. one binary, one toolchain, one toml. ships its own
+            <span class="hl-green">clang</span>, drives
+            <span class="hl-cyan">vcpkg</span> as a backend, builds
+            <span class="hl-magenta">itself</span>.
+        </p>
+
+        <div class="terminal" id="install-terminal" role="region" aria-label="install command">
+            <div class="terminal-titlebar">
+                <span class="t-dot t-dot-red"></span>
+                <span class="t-dot t-dot-yellow"></span>
+                <span class="t-dot t-dot-green"></span>
+                <span class="terminal-title" id="terminal-title">install — <span id="os-label">detecting…</span></span>
+                <button class="copy-btn" id="copy-btn" title="copy">copy</button>
+            </div>
+            <pre class="terminal-body"><code id="install-cmd" aria-live="polite"></code><span class="cursor">█</span></pre>
+        </div>
+
+        <div class="os-tabs" role="tablist" aria-label="Select OS">
+            <button role="tab" class="os-tab" data-os="linux" aria-selected="false">linux</button>
+            <button role="tab" class="os-tab" data-os="macos" aria-selected="false">macos</button>
+            <button role="tab" class="os-tab" data-os="windows" aria-selected="false">windows</button>
+        </div>
+
+        <p class="prereq" id="prereq"></p>
+    </main>
+
+    <section class="features">
+        <div class="feature">
+            <div class="feature-icon">⚡</div>
+            <h3>Bundled LLVM</h3>
+            <p>One <code>rivet toolchain install</code> drops clang-19, lld, libc++ on disk. No system compiler. No <code>apt install build-essential</code>.</p>
+        </div>
+        <div class="feature">
+            <div class="feature-icon">⌬</div>
+            <h3>vcpkg as a backend</h3>
+            <p><code>rivet add fmt</code> works on every platform. Per-project install trees. Auto-link through pkg-config. You never type <em>vcpkg</em>.</p>
+        </div>
+        <div class="feature">
+            <div class="feature-icon">⌃</div>
+            <h3>Multi-target manifests</h3>
+            <p><code>[[lib]]</code> / <code>[[bin]]</code> / <code>[[test]]</code> / <code>[[vendor]]</code> with cargo-style <code>cfg(os="…")</code> overrides and per-source flags.</p>
+        </div>
+        <div class="feature">
+            <div class="feature-icon">∞</div>
+            <h3>Self-hosting</h3>
+            <p>Every release of rivet is built by rivet from its own <code>rivet.toml</code>. 49 sources, 5 artefacts, no cmake in the trace.</p>
+        </div>
+        <div class="feature">
+            <div class="feature-icon">⎈</div>
+            <h3>Three platforms</h3>
+            <p>Linux x86_64 + arm64, macOS arm64, Windows x86_64. All four runners pass the nightly smoke end-to-end.</p>
+        </div>
+        <div class="feature">
+            <div class="feature-icon">⌖</div>
+            <h3>Hermetic</h3>
+            <p>Content-addressed compile cache, in-process libzstd, no host <code>tar</code>/<code>zstd</code> prereq, no shared global vcpkg root.</p>
+        </div>
+    </section>
+
+    <section class="quickstart">
+        <h2 class="section-title"><span class="t-bracket">$</span> quick start</h2>
+        <div class="quickstart-grid">
+            <div class="step">
+                <span class="step-num">01</span>
+                <div class="step-cmd"><code>rivet new hello-fmt &amp;&amp; cd hello-fmt</code></div>
+                <p>Scaffold a new project. <code>src/main.cpp</code>, <code>rivet.toml</code>, <code>.gitignore</code>.</p>
+            </div>
+            <div class="step">
+                <span class="step-num">02</span>
+                <div class="step-cmd"><code>rivet add fmt</code></div>
+                <p>Register fmt as a dependency. Resolved through vcpkg under the hood.</p>
+            </div>
+            <div class="step">
+                <span class="step-num">03</span>
+                <div class="step-cmd"><code>rivet fetch</code></div>
+                <p>vcpkg builds fmt with rivet's bundled clang into <code>~/.rivet/cache/deps/</code>.</p>
+            </div>
+            <div class="step">
+                <span class="step-num">04</span>
+                <div class="step-cmd"><code>rivet build &amp;&amp; rivet run</code></div>
+                <p>Compile, link, execute. Prints <code>hello from fmt 42</code>.</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="status">
+        <h2 class="section-title"><span class="t-bracket">$</span> status</h2>
+        <table class="status-table">
+            <thead>
+                <tr><th>Platform</th><th>Smoke</th><th>Self-build</th><th>Notes</th></tr>
+            </thead>
+            <tbody>
+                <tr><td>Linux x86_64</td><td class="ok">✓</td><td class="ok">✓</td><td>primary</td></tr>
+                <tr><td>Linux arm64</td><td class="ok">✓</td><td class="ok">✓</td><td>primary</td></tr>
+                <tr><td>macOS arm64</td><td class="ok">✓</td><td class="ok">✓</td><td>primary</td></tr>
+                <tr><td>Windows x86_64</td><td class="ok">✓</td><td class="ok">✓</td><td>primary; one-time VS Build Tools install</td></tr>
+            </tbody>
+        </table>
+    </section>
+
+    <footer class="footer">
+        <div class="footer-left">
+            <strong>rivet</strong> v0.2.0 · Apache 2.0
+        </div>
+        <div class="footer-right">
+            <a href="book/">Documentation</a>
+            <a href="https://github.com/fedres/Rivet">GitHub</a>
+            <a href="https://github.com/fedres/Rivet/releases">Releases</a>
+            <a href="https://github.com/fedres/Rivet/blob/main/docs/contributing.md">Contributing</a>
+        </div>
+    </footer>
+
+    <script src="main.js"></script>
+</body>
+</html>

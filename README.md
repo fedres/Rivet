@@ -104,8 +104,8 @@ that's rivet's own build manifest and showcases every feature.
 | Linux         | x86_64       | **Primary**  | smoke green, self-build green |
 | Linux         | arm64        | **Primary**  | smoke green |
 | macOS         | arm64        | **Primary**  | smoke green, self-build green |
-| macOS         | x86_64       | Secondary    | release-only, no nightly smoke runner |
 | Windows       | x86_64       | **Primary**  | smoke green, self-build green |
+| macOS         | x86_64       | Not shipped  | Intel runner queue is unworkable; reintroduce on user ask |
 | Linux (musl)  | x86_64       | Long-term    | not yet shipped |
 
 ---

@@ -36,10 +36,19 @@ jobs:
       - name: Build book
         run: mdbook build docs
 
+      - name: Assemble site
+        # Landing page at /, mdBook output at /book/.
+        # docs/site/{index.html,style.css,main.js} is the hand-written
+        # terminal-themed landing; docs/book/ is the reference docs.
+        run: |
+          mkdir -p deploy
+          cp -r docs/site/. deploy/
+          mv docs/book deploy/book
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/book
+          path: deploy
 
   deploy:
     needs: build

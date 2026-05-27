@@ -9,7 +9,7 @@ default-theme    = "navy"
 preferred-dark-theme = "navy"
 git-repository-url     = "https://github.com/fedres/Rivet"
 edit-url-template      = "https://github.com/fedres/Rivet/edit/main/docs/{path}"
-site-url               = "/Rivet/"
+site-url               = "/Rivet/book/"
 no-section-label       = true
 mathjax-support        = false
 

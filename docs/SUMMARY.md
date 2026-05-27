@@ -10,5 +10,6 @@
 
 # Contributor guide
 
+- [Contributing](contributing.md)
 - [Building Rivet](building.md)
 - [Toolchain bundles](toolchain-bundles.md)
