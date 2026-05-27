@@ -9,6 +9,7 @@
 #include "../build/executor.hpp"
 #include "../build/scheduler.hpp"
 #include "../build/pkgconfig.hpp"
+#include "../toolchain/sdk.hpp"
 #include "../cache/store.hpp"
 #include "../cache/key.hpp"
 #include "../package/manifest.hpp"
@@ -220,6 +221,15 @@ int cmd_build(const Context& ctx) {
         return 1;
     }
     const auto& tc = *tc_r;
+
+    // Platform SDK check (Apple frameworks / Windows Kits). Rivet ships
+    // its own clang and libc++, but Apple/Microsoft don't let us
+    // redistribute the platform SDK — same prereq cargo/zig/bun all have.
+    if (const auto& sdk = rivet::toolchain::detect_host_sdk(); !sdk.present) {
+        std::cerr << "error: platform SDK not detected.\n\n"
+                  << sdk.hint << "\n";
+        return 1;
+    }
 
     // 3. Determine build profile and configuration.
     auto profile_name = std::string{flag_value(args, "--profile").value_or("debug")};
@@ -863,6 +873,14 @@ int cmd_fetch(const Context& ctx) {
     if (manifest.dependencies.empty()) {
         std::cout << "no dependencies declared in rivet.toml — nothing to fetch.\n";
         return 0;
+    }
+
+    // Platform SDK check — vcpkg builds need the Apple frameworks /
+    // Windows Kits headers just like `rivet build` does.
+    if (const auto& sdk = rivet::toolchain::detect_host_sdk(); !sdk.present) {
+        std::cerr << "error: platform SDK not detected (required to build dependencies).\n\n"
+                  << sdk.hint << "\n";
+        return 1;
     }
 
     auto home_r = rivet::env::rivet_home();

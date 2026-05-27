@@ -190,6 +190,7 @@ add_library(rivet_runtime STATIC
     # Toolchain
     runtime/toolchain/discovery.cpp
     runtime/toolchain/compile.cpp
+    runtime/toolchain/sdk.cpp
 
     # Daemon (stub)
     runtime/daemon/daemon.cpp
