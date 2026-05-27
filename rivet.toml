@@ -1,19 +1,31 @@
-# rivet.toml — package manifest for the Rivet build system itself
-# Phase 5: self-hosting milestone — `rivet build rivet`
+# rivet.toml — rivet builds itself with rivet.
+#
+# This manifest is the M1 acceptance proof: `rivet build` on a fresh
+# clone (after `rivet toolchain install`) produces the rivet binary, with
+# no cmake involved in the trace. The existing CMakeLists.txt stays as
+# the alternative build path for now — CI still uses it, and brand-new
+# vcpkg-port authors who don't yet have rivet can build from cmake.
+#
+# Layout mirrors CMakeLists.txt one-to-one:
+#   rivet_pal      platform abstraction layer (linux/macos/windows split)
+#   sqlite_amalg   vendored SQLite amalgamation (-Wno-all on the .c file)
+#   zstd_decomp    vendored libzstd (decompress side, also -Wno-all)
+#   rivet_runtime  everything in runtime/ except main.cpp
+#   rivet          the binary; depends on rivet_runtime
+#
+# Adding a new C++ source: drop it under runtime/<area>/ and append the
+# relative path to the matching [[lib]].sources list. No cmake regen, no
+# separate test-listing — `rivet build` walks the manifest and rebuilds.
 
 [package]
 name        = "rivet"
 version     = "0.1.0"
-description = "A self-contained, zero-dependency C++ build system"
-authors     = ["The Rivet Contributors"]
+description = "C++ build system, package manager, and toolchain"
 license     = "MIT"
-repository  = "https://github.com/rivet-lang/rivet"
-keywords    = ["build-system", "cpp", "toolchain"]
+repository  = "https://github.com/fedres/Rivet"
 
 [build]
-system  = "rivet"
 cxx_std = "c++23"
-targets = ["rivet"]
 
 [profiles.debug]
 opt_level = 0
@@ -24,12 +36,136 @@ opt_level = 2
 debug     = false
 lto       = true
 
-[profiles.asan]
-opt_level  = 0
-debug      = true
-sanitizers = ["address", "undefined"]
+# ─── rivet_pal — platform abstraction layer ──────────────────────────────────
 
-[profiles.tsan]
-opt_level  = 0
-debug      = true
-sanitizers = ["thread"]
+[[lib]]
+name          = "rivet_pal"
+include_dirs  = [".", "platform/common"]
+# Cross-platform code lives under platform/common; per-OS lifts via cfg.
+sources       = []
+compile_flags = [
+    "-Wall", "-Wextra", "-Wpedantic",
+    "-Wno-unused-parameter",
+    "-Wno-missing-field-initializers",
+]
+
+[[lib.cfg]]
+os = "linux"
+sources = [
+    "platform/linux/fs.cpp",
+    "platform/linux/process.cpp",
+    "platform/linux/env.cpp",
+    "platform/linux/terminal.cpp",
+    "platform/linux/net.cpp",
+    "platform/linux/sandbox.cpp",
+]
+link_libs = ["-lssl", "-lcrypto"]
+
+[[lib.cfg]]
+os = "macos"
+sources = [
+    "platform/macos/fs.cpp",
+    "platform/macos/process.cpp",
+    "platform/macos/env.cpp",
+    "platform/macos/terminal.cpp",
+    "platform/macos/net.cpp",
+    "platform/macos/sandbox.cpp",
+]
+link_libs = ["-framework", "CoreFoundation", "-framework", "Security"]
+
+[[lib.cfg]]
+os = "windows"
+sources = [
+    "platform/windows/fs.cpp",
+    "platform/windows/process.cpp",
+    "platform/windows/env.cpp",
+    "platform/windows/terminal.cpp",
+    "platform/windows/net.cpp",
+    "platform/windows/sandbox.cpp",
+]
+link_libs     = ["-lws2_32", "-lcrypt32", "-lshlwapi", "-lbcrypt", "-lwinhttp"]
+compile_flags = ["-DWIN32_LEAN_AND_MEAN", "-DNOMINMAX", "-DUNICODE", "-D_UNICODE"]
+
+# ─── sqlite_amalg — vendored SQLite amalgamation ─────────────────────────────
+
+[[vendor]]
+name         = "sqlite_amalg"
+sources      = ["vendor/sqlite/sqlite3.c"]
+include_dirs = ["vendor/sqlite"]
+defines      = ["SQLITE_THREADSAFE=1", "SQLITE_OMIT_LOAD_EXTENSION=1"]
+
+[vendor.per_source_flags]
+"vendor/sqlite/sqlite3.c" = ["-Wno-all", "-Wno-extra", "-Wno-pedantic"]
+
+# ─── zstd_decomp — vendored libzstd decompress side ──────────────────────────
+
+[[vendor]]
+name         = "zstd_decomp"
+sources      = ["vendor/zstd/common/*.c", "vendor/zstd/decompress/*.c"]
+include_dirs = ["vendor/zstd"]
+defines      = ["RIVET_HAVE_ZSTD=1", "ZSTD_DISABLE_ASM=1"]
+
+[vendor.per_source_flags]
+"vendor/zstd/common/*.c"     = ["-Wno-all", "-Wno-extra", "-Wno-pedantic"]
+"vendor/zstd/decompress/*.c" = ["-Wno-all", "-Wno-extra", "-Wno-pedantic"]
+
+# ─── rivet_runtime — main static library ─────────────────────────────────────
+
+[[lib]]
+name         = "rivet_runtime"
+include_dirs = [".", "vendor/zstd"]
+depends_on   = ["rivet_pal", "sqlite_amalg", "zstd_decomp"]
+defines      = ["RIVET_HAVE_ZSTD=1"]
+sources = [
+    # CLI
+    "runtime/cli/cli.cpp",
+
+    # Build IR layer
+    "runtime/build/graph.cpp",
+    "runtime/build/scheduler.cpp",
+    "runtime/build/executor.cpp",
+    "runtime/build/pkgconfig.cpp",
+    "runtime/build/multi_target.cpp",
+
+    # Cache layer
+    "runtime/cache/key.cpp",
+    "runtime/cache/store.cpp",
+    "runtime/cache/binary_cache.cpp",
+
+    # Package management
+    "runtime/package/manifest.cpp",
+    "runtime/package/lockfile.cpp",
+    "runtime/package/source.cpp",
+    "runtime/package/resolver.cpp",
+    "runtime/package/sources/local.cpp",
+    "runtime/package/sources/git.cpp",
+    "runtime/package/sources/vcpkg.cpp",
+    "runtime/package/default_sources.cpp",
+
+    # Common
+    "runtime/common/json.cpp",
+
+    # Toolchain
+    "runtime/toolchain/discovery.cpp",
+    "runtime/toolchain/compile.cpp",
+    "runtime/toolchain/sdk.cpp",
+
+    # Archive (in-process tar.zst)
+    "runtime/archive/tar_zst.cpp",
+
+    # Stubs / scaffolding
+    "runtime/daemon/daemon.cpp",
+    "runtime/modules/scanner.cpp",
+]
+compile_flags = [
+    "-Wall", "-Wextra", "-Wpedantic",
+    "-Wno-unused-parameter",
+    "-Wno-missing-field-initializers",
+]
+
+# ─── rivet — the binary ──────────────────────────────────────────────────────
+
+[[bin]]
+name       = "rivet"
+path       = "runtime/main.cpp"
+depends_on = ["rivet_runtime"]
