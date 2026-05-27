@@ -172,7 +172,65 @@ def main() -> None:
         if "hello from fmt 42" not in proc.stdout:
             sys.exit(f"unexpected output: {proc.stdout!r}")
 
-        banner("SMOKE TEST PASSED")
+        # ── M1 multi-target validation ────────────────────────────────────
+        # The hello-fmt path above exercises the single-binary src/-scan
+        # build path. We also need to validate the multi-target engine
+        # (rivet's own self-build will rely on it). Scaffold a tiny
+        # lib + bin project on the side and build it through the same
+        # rivet binary.
+        banner("step 9: multi-target build (lib + bin, M1 engine)")
+        m1 = workdir / "m1demo"
+        m1.mkdir()
+        (m1 / "src" / "lib").mkdir(parents=True)
+        (m1 / "src" / "bin").mkdir(parents=True)
+        (m1 / "rivet.toml").write_text(
+            "[package]\n"
+            "name = \"m1demo\"\n"
+            "version = \"0.1.0\"\n"
+            "\n"
+            "[[lib]]\n"
+            "name = \"greeter\"\n"
+            "sources = [\"src/lib/greeter.cpp\"]\n"
+            "include_dirs = [\"src/lib\"]\n"
+            "\n"
+            "[[bin]]\n"
+            "name = \"say-hi\"\n"
+            "path = \"src/bin/main.cpp\"\n"
+            "depends_on = [\"greeter\"]\n"
+        )
+        (m1 / "src" / "lib" / "greeter.h").write_text(
+            "#pragma once\n"
+            "namespace greeter { void say(const char* who); }\n"
+        )
+        (m1 / "src" / "lib" / "greeter.cpp").write_text(
+            "#include <iostream>\n"
+            "#include \"greeter.h\"\n"
+            "void greeter::say(const char* who) { std::cout << \"hello \" << who << \"\\n\"; }\n"
+        )
+        (m1 / "src" / "bin" / "main.cpp").write_text(
+            "#include \"../lib/greeter.h\"\n"
+            "int main() { greeter::say(\"M1\"); return 0; }\n"
+        )
+        run([str(rivet_bin), "build"], cwd=m1, env=env, timeout=300)
+
+        # Locate + run the produced binary.
+        m1_bin = m1 / ".rivet" / "build" / "debug" / "bin" / "say-hi"
+        if not m1_bin.exists():
+            for cand in m1.rglob("say-hi*"):
+                if cand.is_file() and ".rivet" in cand.parts:
+                    m1_bin = cand
+                    break
+        if not m1_bin.exists():
+            sys.exit(f"M1 binary 'say-hi' not produced under {m1}")
+        proc = subprocess.run([str(m1_bin)], capture_output=True, text=True,
+                              timeout=30, env=env)
+        print(f"M1 stdout: {proc.stdout!r}", flush=True)
+        if proc.returncode != 0:
+            sys.exit(f"M1 binary exited {proc.returncode}")
+        if "hello M1" not in proc.stdout:
+            sys.exit(f"M1 unexpected output: {proc.stdout!r}")
+
+        banner("SMOKE TEST PASSED (hello-fmt + M1 multi-target)")
     except BaseException:
         failed = True
         raise
