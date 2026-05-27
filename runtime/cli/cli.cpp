@@ -437,8 +437,12 @@ int cmd_test(const Context& ctx) {
     int build_rc = cmd_build(ctx);
     if (build_rc != 0) return build_rc;
 
-    auto cwd_opt = rivet::env::get("PWD");
-    Path cwd = cwd_opt ? Path{*cwd_opt} : Path{"."};
+    // Use the actual OS-level cwd, not $PWD: tools that invoke rivet via
+    // fork+exec (Python subprocess, build scripts, etc.) update the process
+    // cwd via chdir() but leave $PWD pointing at the parent's cwd. Reading
+    // $PWD here makes rivet walk up from the wrong directory and find an
+    // unrelated rivet.toml on the way to the filesystem root.
+    Path cwd = std::filesystem::current_path();
     auto manifest_r = rivet::pkg::find_and_parse(cwd);
     if (!manifest_r) return 1;
     const auto& manifest = *manifest_r;
@@ -593,8 +597,12 @@ int cmd_run(const Context& ctx) {
     auto args = ctx.args_after_subcommand();
 
     // Load manifest first so we can dispatch to a script if applicable.
-    auto cwd_opt = rivet::env::get("PWD");
-    Path cwd = cwd_opt ? Path{*cwd_opt} : Path{"."};
+    // Use the actual OS-level cwd, not $PWD: tools that invoke rivet via
+    // fork+exec (Python subprocess, build scripts, etc.) update the process
+    // cwd via chdir() but leave $PWD pointing at the parent's cwd. Reading
+    // $PWD here makes rivet walk up from the wrong directory and find an
+    // unrelated rivet.toml on the way to the filesystem root.
+    Path cwd = std::filesystem::current_path();
     auto manifest_r = rivet::pkg::find_and_parse(cwd);
     if (!manifest_r) {
         std::cerr << "error: " << manifest_r.error().message << "\n";
@@ -698,8 +706,12 @@ int cmd_add(const Context& ctx) {
     }
 
     // Find manifest.
-    auto cwd_opt = rivet::env::get("PWD");
-    Path cwd = cwd_opt ? Path{*cwd_opt} : Path{"."};
+    // Use the actual OS-level cwd, not $PWD: tools that invoke rivet via
+    // fork+exec (Python subprocess, build scripts, etc.) update the process
+    // cwd via chdir() but leave $PWD pointing at the parent's cwd. Reading
+    // $PWD here makes rivet walk up from the wrong directory and find an
+    // unrelated rivet.toml on the way to the filesystem root.
+    Path cwd = std::filesystem::current_path();
     auto manifest_r = rivet::pkg::find_and_parse(cwd);
     if (!manifest_r) {
         std::cerr << "error: " << manifest_r.error().message << "\n";
@@ -779,8 +791,12 @@ int cmd_fetch(const Context& ctx) {
     bool locked = has_flag(args, "--locked") || has_flag(args, "--frozen");
     bool frozen = has_flag(args, "--frozen");
 
-    auto cwd_opt = rivet::env::get("PWD");
-    Path cwd = cwd_opt ? Path{*cwd_opt} : Path{"."};
+    // Use the actual OS-level cwd, not $PWD: tools that invoke rivet via
+    // fork+exec (Python subprocess, build scripts, etc.) update the process
+    // cwd via chdir() but leave $PWD pointing at the parent's cwd. Reading
+    // $PWD here makes rivet walk up from the wrong directory and find an
+    // unrelated rivet.toml on the way to the filesystem root.
+    Path cwd = std::filesystem::current_path();
     auto manifest_r = rivet::pkg::find_and_parse(cwd);
     if (!manifest_r) {
         std::cerr << "error: " << manifest_r.error().message << "\n";
@@ -884,8 +900,12 @@ int cmd_remove(const Context& ctx) {
     }
     std::string pkg_name{args[0]};
 
-    auto cwd_opt = rivet::env::get("PWD");
-    Path cwd = cwd_opt ? Path{*cwd_opt} : Path{"."};
+    // Use the actual OS-level cwd, not $PWD: tools that invoke rivet via
+    // fork+exec (Python subprocess, build scripts, etc.) update the process
+    // cwd via chdir() but leave $PWD pointing at the parent's cwd. Reading
+    // $PWD here makes rivet walk up from the wrong directory and find an
+    // unrelated rivet.toml on the way to the filesystem root.
+    Path cwd = std::filesystem::current_path();
     auto manifest_r = rivet::pkg::find_and_parse(cwd);
     if (!manifest_r) {
         std::cerr << "error: " << manifest_r.error().message << "\n";
@@ -986,8 +1006,12 @@ int cmd_new(const Context& ctx) {
 int cmd_publish(const Context& ctx) {
     auto args = ctx.args_after_subcommand();
 
-    auto cwd_opt = rivet::env::get("PWD");
-    Path cwd = cwd_opt ? Path{*cwd_opt} : Path{"."};
+    // Use the actual OS-level cwd, not $PWD: tools that invoke rivet via
+    // fork+exec (Python subprocess, build scripts, etc.) update the process
+    // cwd via chdir() but leave $PWD pointing at the parent's cwd. Reading
+    // $PWD here makes rivet walk up from the wrong directory and find an
+    // unrelated rivet.toml on the way to the filesystem root.
+    Path cwd = std::filesystem::current_path();
     auto manifest_r = rivet::pkg::find_and_parse(cwd);
     if (!manifest_r) {
         std::cerr << "error: " << manifest_r.error().message << "\n";
@@ -1368,8 +1392,12 @@ int cmd_toolchain(const Context& ctx) {
 int cmd_fuzz(const Context& ctx) {
     auto args = ctx.args_after_subcommand();
 
-    auto cwd_opt = rivet::env::get("PWD");
-    Path cwd = cwd_opt ? Path{*cwd_opt} : Path{"."};
+    // Use the actual OS-level cwd, not $PWD: tools that invoke rivet via
+    // fork+exec (Python subprocess, build scripts, etc.) update the process
+    // cwd via chdir() but leave $PWD pointing at the parent's cwd. Reading
+    // $PWD here makes rivet walk up from the wrong directory and find an
+    // unrelated rivet.toml on the way to the filesystem root.
+    Path cwd = std::filesystem::current_path();
     auto manifest_r = rivet::pkg::find_and_parse(cwd);
     if (!manifest_r) {
         std::cerr << "error: " << manifest_r.error().message << "\n";
