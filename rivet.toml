@@ -83,7 +83,16 @@ sources = [
     "platform/windows/net.cpp",
     "platform/windows/sandbox.cpp",
 ]
-link_libs     = ["-lws2_32", "-lcrypt32", "-lshlwapi", "-lbcrypt", "-lwinhttp"]
+# Note: cmake auto-adds advapi32/shell32/user32/kernel32 via link.exe's
+# default lib list. lld-link (which we drive via -fuse-ld=lld) doesn't,
+# so we list every Win32 import lib our PAL actually references.
+#   shell32  — SHGetFolderPathW (env.cpp)
+#   advapi32 — Reg* APIs (env.cpp, sdk.cpp)
+#   userenv  — GetUserProfileDirectoryW (env.cpp)
+link_libs     = [
+    "-lws2_32", "-lcrypt32", "-lshlwapi", "-lbcrypt", "-lwinhttp",
+    "-lshell32", "-ladvapi32", "-luserenv", "-luser32", "-lole32",
+]
 compile_flags = ["-DWIN32_LEAN_AND_MEAN", "-DNOMINMAX", "-DUNICODE", "-D_UNICODE"]
 
 # ─── sqlite_amalg — vendored SQLite amalgamation ─────────────────────────────
