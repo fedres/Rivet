@@ -2,6 +2,7 @@
 #include "multi_target.hpp"
 
 #include "../toolchain/compile.hpp"
+#include "../toolchain/triple.hpp"
 #include "../cache/store.hpp"
 #include "../cache/key.hpp"
 #include "../../platform/interface/fs.hpp"
@@ -29,6 +30,38 @@ constexpr std::string_view host_os() {
 bool cfg_matches_host(const pkg::CfgPredicate& p) {
     if (p.os.has_value() && *p.os != host_os()) return false;
     return true;
+}
+
+// Cross-target variant: evaluates the cfg predicate against `target_os`
+// rather than the host. Used by `rivet check --target=<triple>` so a
+// macOS user can preview a Linux build's compile lines without hitting
+// the host's cfg branches.
+bool cfg_matches_target(const pkg::CfgPredicate& p, std::string_view target_os) {
+    if (target_os.empty()) return cfg_matches_host(p);
+    if (p.os.has_value() && *p.os != target_os) return false;
+    return true;
+}
+
+// Pull the os component out of a target triple string. Best-effort —
+// returns "" when the triple is empty (caller falls back to host).
+//
+// Real-world triples don't follow a single layout:
+//   x86_64-linux-gnu             → arch-OS-abi      (os = linux)
+//   arm64-apple-macos11          → arch-vendor-os
+//   x86_64-pc-windows-msvc       → arch-vendor-os-abi
+// So we scan the whole triple for known OS substrings, not just the second
+// component. Returns the canonical "linux" / "macos" / "windows" form that
+// rivet.toml's [[lib.cfg]] os = "..." entries are written against.
+std::string target_os_from_triple(std::string_view triple) {
+    if (triple.empty()) return {};
+    if (triple.find("windows") != std::string_view::npos) return "windows";
+    if (triple.find("macos")   != std::string_view::npos) return "macos";
+    if (triple.find("darwin")  != std::string_view::npos) return "macos";
+    if (triple.find("apple")   != std::string_view::npos) return "macos";
+    if (triple.find("linux")   != std::string_view::npos) return "linux";
+    // Fall through: let the Triple parser guess the os component.
+    auto t = toolchain::Triple::from_string(triple);
+    return t.os;
 }
 
 // ─── Source-list resolution ─────────────────────────────────────────────────
@@ -226,6 +259,13 @@ build_targets(const pkg::Manifest& manifest,
               cache::Store* cache_store) {
     (void)cache_store;  // cache integration is per-task via Executor
 
+    // Resolve cfg-evaluation OS once. When base_cfg.target_triple is empty
+    // (the default), fall back to host_os(). cmd_check sets it explicitly
+    // so cross-target previews evaluate Linux/Windows cfg correctly on a
+    // Mac host.
+    std::string target_os = target_os_from_triple(base_cfg.target_triple);
+    if (target_os.empty()) target_os = host_os();
+
     auto order_r = topo_targets(manifest.targets);
     if (!order_r) return propagate<std::vector<TargetArtifact>>(order_r);
 
@@ -245,7 +285,7 @@ build_targets(const pkg::Manifest& manifest,
         std::vector<std::string> all_link_libs     = tgt.link_libs;
         std::vector<std::string> all_compile_flags = tgt.compile_flags;
         for (const auto& ov : tgt.cfg_overrides) {
-            if (!cfg_matches_host(ov.cfg)) continue;
+            if (!cfg_matches_target(ov.cfg, target_os)) continue;
             for (const auto& s : ov.extra_sources)       all_sources.push_back(s);
             for (const auto& l : ov.extra_link_libs)     all_link_libs.push_back(l);
             for (const auto& f : ov.extra_compile_flags) all_compile_flags.push_back(f);
@@ -401,7 +441,7 @@ build_targets(const pkg::Manifest& manifest,
                     if (!dep_tgt) return {};  // shouldn't happen
                     for (const auto& l : dep_tgt->link_libs) lj.flags.push_back(l);
                     for (const auto& ov : dep_tgt->cfg_overrides) {
-                        if (!cfg_matches_host(ov.cfg)) continue;
+                        if (!cfg_matches_target(ov.cfg, target_os)) continue;
                         for (const auto& l : ov.extra_link_libs)
                             lj.flags.push_back(l);
                     }

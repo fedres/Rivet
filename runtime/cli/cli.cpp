@@ -22,6 +22,7 @@
 #include "../package/sources/vcpkg.hpp"
 #include "../toolchain/discovery.hpp"
 #include "../toolchain/compile.hpp"
+#include "../toolchain/triple.hpp"
 #include "../daemon/daemon.hpp"
 #include "../../platform/interface/net.hpp"
 
@@ -82,6 +83,7 @@ int run(const Context& ctx) {
     if (sub == "version" || sub == "--version" || sub == "-V")
         return cmd_version(ctx);
     if (sub == "build")    return cmd_build(ctx);
+    if (sub == "check")    return cmd_check(ctx);
     if (sub == "test")     return cmd_test(ctx);
     if (sub == "run")      return cmd_run(ctx);
     if (sub == "exec")     return cmd_exec(ctx);
@@ -124,8 +126,17 @@ static bool has_flag(const std::vector<std::string_view>& args, std::string_view
 
 static std::optional<std::string_view>
 flag_value(const std::vector<std::string_view>& args, std::string_view flag) {
-    for (std::size_t i = 0; i + 1 < args.size(); ++i)
-        if (args[i] == flag) return args[i + 1];
+    // Accept both `--flag value` and `--flag=value` forms. Without the
+    // `=` form we silently fall back to defaults — surprised more than
+    // one caller, including cmd_check's --target=<triple>.
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        if (args[i] == flag && i + 1 < args.size()) return args[i + 1];
+        if (args[i].size() > flag.size() + 1 &&
+            args[i].substr(0, flag.size()) == flag &&
+            args[i][flag.size()] == '=') {
+            return args[i].substr(flag.size() + 1);
+        }
+    }
     return std::nullopt;
 }
 
@@ -745,6 +756,151 @@ int cmd_build(const Context& ctx) {
         std::cout << std::format("  Binary: {}\n", bin_output.string());
 
     return summary.failed == 0 ? 0 : 1;
+}
+
+// ─── cmd_check ───────────────────────────────────────────────────────────────
+//
+// Dry-run: parse the manifest, populate the build graph for `--target=<triple>`
+// (defaulting to host), and print the compile/link/archive commands without
+// running them. Useful for:
+//   - manifest sanity (does this even *attempt* to build?)
+//   - cross-target previews (`rivet check --target=x86_64-windows-msvc` from a Mac)
+//   - CI smoke that's faster than a full build
+//
+// Scope: multi-target manifests (the production case) + workspace recursion.
+// The single-binary src/-scan and cmake-drive paths are not covered yet —
+// the latter has no rivet IR to enumerate, and the former is straightforward
+// to add later if anyone asks.
+
+int cmd_check(const Context& ctx) {
+    auto args = ctx.args_after_subcommand();
+    Path cwd  = std::filesystem::current_path();
+
+    auto manifest_r = rivet::pkg::find_and_parse(cwd);
+    if (!manifest_r) {
+        std::cerr << "error: " << manifest_r.error().message << "\n";
+        return 1;
+    }
+    const auto& manifest = *manifest_r;
+
+    // Workspace recursion mirrors cmd_build.
+    if (manifest.workspace.has_value() && manifest.name.empty()) {
+        const auto& ws = *manifest.workspace;
+        if (ws.members.empty()) {
+            std::cerr << "error: [workspace] has no members.\n";
+            return 1;
+        }
+        auto self = rivet::process::self_exe();
+        if (!self) {
+            std::cerr << "error: cannot resolve rivet binary path: "
+                      << self.error().message << "\n";
+            return 1;
+        }
+        std::string fwd_target{flag_value(args, "--target").value_or("")};
+        std::string fwd_profile{flag_value(args, "--profile").value_or("debug")};
+        int failed = 0;
+        for (const auto& m : ws.members) {
+            Path member_dir = manifest.root_dir / m;
+            if (!rivet::fs::exists(member_dir / "rivet.toml").value_or(false))
+                continue;
+            std::cout << "\n══ checking workspace member: " << m << " ══\n";
+            rivet::process::SpawnOptions opts;
+            opts.args = {self->string(), "check", "--profile=" + fwd_profile};
+            if (!fwd_target.empty()) opts.args.push_back("--target=" + fwd_target);
+            opts.working_dir = member_dir;
+            opts.inherit_env = true;
+            auto child = rivet::process::spawn(std::move(opts));
+            if (!child) { ++failed; continue; }
+            auto code = child->wait();
+            if (!code || *code != 0) ++failed;
+        }
+        std::cout << "\n══ workspace check: " << ws.members.size() - failed
+                  << " ok, " << failed << " failed ══\n";
+        return failed == 0 ? 0 : 1;
+    }
+
+    if (auto vr = rivet::pkg::validate(manifest); !vr) {
+        std::cerr << "error: " << vr.error().message << "\n";
+        return 1;
+    }
+
+    // Toolchain — required to emit accurate command paths even though
+    // we never execute them. Matches cargo's `cargo check` behaviour.
+    auto rivet_home_r = rivet::env::rivet_home();
+    if (!rivet_home_r) {
+        std::cerr << "error: cannot determine rivet home: "
+                  << rivet_home_r.error().message << "\n";
+        return 1;
+    }
+    auto tc_r = rivet::toolchain::find_active(*rivet_home_r);
+    if (!tc_r) {
+        std::cerr << "error: no toolchain available: " << tc_r.error().message << "\n"
+                  << "hint: run 'rivet toolchain install <version>' first.\n";
+        return 1;
+    }
+    const auto& tc = *tc_r;
+
+    // Build config.
+    auto profile_name = std::string{flag_value(args, "--profile").value_or("debug")};
+    bool is_release   = (profile_name == "release");
+
+    rivet::build::BuildConfig cfg;
+    cfg.cxx_std = manifest.build.cxx_std;
+    cfg.opt     = is_release ? rivet::build::OptLevel::O2 : rivet::build::OptLevel::Debug;
+    cfg.debug   = !is_release;
+
+    // Target triple — default to host, override via --target.
+    std::string triple_str{flag_value(args, "--target").value_or("")};
+    if (triple_str.empty())
+        triple_str = rivet::toolchain::Triple::host().to_string();
+    cfg.target_triple = triple_str;
+
+    std::cout << std::format(
+        "Checking {} {} [{}] for {}\n",
+        manifest.name, manifest.version, profile_name, triple_str);
+
+    if (manifest.targets.empty()) {
+        std::cout << "  (no [[lib]] / [[bin]] / [[test]] / [[vendor]] targets; "
+                  << "single-binary src/-scan check is not implemented yet — "
+                  << "use `rivet build` for that path)\n";
+        return 0;
+    }
+
+    // Populate the graph WITHOUT a cache store — derive_key skips when null,
+    // and the executor never runs, so commands print as-built.
+    rivet::build::BuildGraph graph;
+    rivet::build::InstalledExternalDeps no_deps; // dry-run skips dep resolution
+    auto art_r = rivet::build::build_targets(
+        manifest, tc, cfg, no_deps, profile_name, graph, nullptr);
+    if (!art_r) {
+        std::cerr << "error: " << art_r.error().message << "\n";
+        return 1;
+    }
+
+    // Pretty-print every Compile/Link/Archive command in DFS-stable order.
+    size_t n_compile = 0, n_link = 0, n_archive = 0;
+    for (const auto& node : graph.nodes()) {
+        if (!node.command.has_value()) continue;
+        const auto& c = *node.command;
+        const char* tag =
+            node.kind == rivet::build::TaskKind::Compile  ? "cc " :
+            node.kind == rivet::build::TaskKind::Link     ? "ld " :
+            node.kind == rivet::build::TaskKind::Archive  ? "ar " : "?? ";
+        switch (node.kind) {
+            case rivet::build::TaskKind::Compile: ++n_compile; break;
+            case rivet::build::TaskKind::Link:    ++n_link;    break;
+            case rivet::build::TaskKind::Archive: ++n_archive; break;
+            default: break;
+        }
+        std::cout << "  " << tag << node.name << "\n";
+        std::cout << "    $ " << c.executable;
+        for (const auto& a : c.args) std::cout << ' ' << a;
+        std::cout << '\n';
+    }
+    std::cout << std::format(
+        "\n  {} compile + {} archive + {} link command(s) would run\n",
+        n_compile, n_archive, n_link);
+    return 0;
 }
 
 // ─── cmd_test ────────────────────────────────────────────────────────────────
