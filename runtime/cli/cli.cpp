@@ -266,6 +266,20 @@ int cmd_build(const Context& ctx) {
         cfg.sanitizers = {"undefined"};
     }
 
+    // 3a. Source layout conventions (cargo-like). All optional — if the
+    // directory doesn't exist we just skip it.
+    //   src/          — sources (mandatory; scanned recursively below)
+    //   include/      — public headers, auto-added to compile paths so
+    //                   sources can `#include "<project>/foo.h"`
+    //   The project root itself is also added so `#include "config.h"`
+    //   etc. resolve against the project layout.
+    {
+        Path include_dir = manifest.root_dir / "include";
+        if (rivet::fs::exists(include_dir).value_or(false))
+            cfg.include_paths.push_back(include_dir);
+        cfg.include_paths.push_back(manifest.root_dir);
+    }
+
     // 3b. Wire fetched dependencies. After `rivet fetch` the per-triplet
     // install tree sits under <rivet_home>/cache/deps/<root>/vcpkg-installed/
     // <triplet>/{include,lib,lib/pkgconfig}.
