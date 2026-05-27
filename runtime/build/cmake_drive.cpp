@@ -78,23 +78,30 @@ std::string make_toolchain_text(const toolchain::ToolchainInfo& tc,
             "list(PREPEND CMAKE_PREFIX_PATH \"{}\")\n", path(extra_prefix));
     }
 
-    // find_package interception. Every find_package() call the user's
-    // CMakeLists makes is logged to <build_dir>/rivet-find-package.log.
-    // After configure, rivet reads it and surfaces a list of packages
-    // the project asked for — useful both for diagnosing "what do I need
-    // to `rivet add`?" and for the (future) `rivet add --from-find-package`
+    // find_package interception. Every TOP-LEVEL find_package() call from
+    // the user's CMakeLists is logged to <build_dir>/rivet-find-package.log.
+    // After configure, rivet reads it and surfaces a list of packages the
+    // project asked for — useful both for diagnosing "what do I need to
+    // `rivet add`?" and for the future `rivet add --from-find-package`
     // bulk-import flow.
     //
-    // The macro-override pattern is documented in CMake: defining a macro
-    // with the same name as a built-in command makes CMake auto-provide
-    // `_<name>` as the underlying call. We log, then delegate. Failures
-    // (`REQUIRED` packages not found) propagate normally through the
-    // inner call — the log entry exists regardless of outcome.
+    // Recursion guard: when our override calls `_find_package`, that may
+    // dive through internal CMake modules that themselves use
+    // find_package(...) (e.g. CheckCXXCompilerFlag, Threads probing).
+    // Without the guard `_find_package` re-enters our macro and CMake
+    // hits its 1000-depth recursion limit. The `RIVET_IN_FIND_PACKAGE`
+    // flag scopes logging to outer calls only.
     text +=
         "macro(find_package _rivet_pkg)\n"
-        "    file(APPEND \"${CMAKE_BINARY_DIR}/rivet-find-package.log\"\n"
-        "         \"${_rivet_pkg}\\n\")\n"
-        "    _find_package(${ARGV})\n"
+        "    if(NOT DEFINED RIVET_IN_FIND_PACKAGE)\n"
+        "        set(RIVET_IN_FIND_PACKAGE TRUE)\n"
+        "        file(APPEND \"${CMAKE_BINARY_DIR}/rivet-find-package.log\"\n"
+        "             \"${_rivet_pkg}\\n\")\n"
+        "        _find_package(${ARGV})\n"
+        "        unset(RIVET_IN_FIND_PACKAGE)\n"
+        "    else()\n"
+        "        _find_package(${ARGV})\n"
+        "    endif()\n"
         "endmacro()\n";
 
     return text;
