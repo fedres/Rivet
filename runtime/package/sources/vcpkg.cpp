@@ -129,7 +129,11 @@ Result<Path> write_overlay_triplet(const Path& vcpkg_root,
     std::string cxx_path = tc.clangpp().generic_string();
     std::string ar_path  = tc.llvm_ar().generic_string();
     std::string ld_path  = tc.lld().generic_string();
-    std::string ranlib_path = ar_path;  // llvm-ranlib is a hardlink to llvm-ar
+    // llvm-ar in ranlib mode requires being *invoked* as `llvm-ranlib`
+    // (it dispatches on argv[0]). CMake calls `<RANLIB> <archive>` without
+    // any operation flag, so pointing RANLIB at llvm-ar makes llvm-ar error
+    // with "expected [relpos] for 'a', 'b', or 'i' modifier".
+    std::string ranlib_path = tc.llvm_ranlib().generic_string();
 #endif
 
     // Chainload toolchain file: pins CC/CXX/AR to the bundled binaries.

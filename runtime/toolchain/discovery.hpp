@@ -29,8 +29,9 @@ struct ToolchainInfo {
     [[nodiscard]] Path clang_cl()   const { return root / "bin" / "clang-cl"; }
     [[nodiscard]] Path lld()        const { return root / "bin" / "lld"; }
     [[nodiscard]] Path lld_link()   const { return root / "bin" / "lld-link.exe"; }
-    [[nodiscard]] Path llvm_ar()    const { return root / "bin" / "llvm-ar"; }
-    [[nodiscard]] Path llvm_strip() const { return root / "bin" / "llvm-strip"; }
+    [[nodiscard]] Path llvm_ar()     const { return root / "bin" / "llvm-ar"; }
+    [[nodiscard]] Path llvm_ranlib() const { return root / "bin" / "llvm-ranlib"; }
+    [[nodiscard]] Path llvm_strip()  const { return root / "bin" / "llvm-strip"; }
     [[nodiscard]] Path scan_deps()  const { return root / "bin" / "clang-scan-deps"; }
 
     [[nodiscard]] Path compiler_rt_dir() const {
