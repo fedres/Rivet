@@ -115,20 +115,24 @@ Result<Path> write_overlay_triplet(const Path& vcpkg_root,
     if (auto r = rivet::fs::create_dirs(overlay_dir); !r)
         return make_error<Path>(r.error().message);
 
-#if defined(_WIN32)
-    // clang-cl is LLVM's MSVC-compatible driver — must match vcpkg's CRT/ABI.
-    std::string cc_path  = (tc.root / "bin" / "clang-cl.exe").generic_string();
-    std::string cxx_path = cc_path;
-    std::string ar_path  = (tc.root / "bin" / "llvm-lib.exe").generic_string();
-    std::string ld_path  = (tc.root / "bin" / "lld-link.exe").generic_string();
-    std::string ranlib_path = ar_path;  // llvm-lib subsumes ranlib on Windows
-#else
     // generic_string() converts to forward slashes — safe in CMake double-quoted
-    // strings on every platform.
-    std::string cc_path  = tc.clang().generic_string();
-    std::string cxx_path = tc.clangpp().generic_string();
-    std::string ar_path  = tc.llvm_ar().generic_string();
-    std::string ld_path  = tc.lld().generic_string();
+    // strings on every platform. ToolchainInfo already appends .exe on Windows.
+#if defined(_WIN32)
+    // On Windows we use the MSVC-compatible LLVM driver (`clang-cl`) so the
+    // ABI matches vcpkg's CRT linkage; on POSIX the regular driver is right.
+    // llvm-lib subsumes ranlib on Windows — it's an archive *creator*, not
+    // a ranlib invoke-with-no-args (the failure mode we hit on POSIX with
+    // llvm-ar).
+    std::string cc_path     = tc.clang_cl().generic_string();
+    std::string cxx_path    = cc_path;
+    std::string ar_path     = tc.llvm_lib().generic_string();
+    std::string ld_path     = tc.lld_link().generic_string();
+    std::string ranlib_path = ar_path;
+#else
+    std::string cc_path     = tc.clang().generic_string();
+    std::string cxx_path    = tc.clangpp().generic_string();
+    std::string ar_path     = tc.llvm_ar().generic_string();
+    std::string ld_path     = tc.lld().generic_string();
     // llvm-ar in ranlib mode requires being *invoked* as `llvm-ranlib`
     // (it dispatches on argv[0]). CMake calls `<RANLIB> <archive>` without
     // any operation flag, so pointing RANLIB at llvm-ar makes llvm-ar error
