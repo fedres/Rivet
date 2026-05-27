@@ -1,0 +1,176 @@
+name: LLVM benchmark (heavy)
+
+# Stress test: have rivet drive a constrained LLVM build end-to-end.
+# Validates that the cmake-drive path holds up against a real, complex,
+# template-heavy C++ codebase — not just the toy cmake_demo in smoke.yml.
+#
+# Heavy: ~30-60 min wall clock on a free 2-core ubuntu-22.04 runner.
+# Manual-only by default + monthly schedule. Free runners only — paid
+# concurrency burnt by smoke + release is enough on its own.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # First of the month, 04:00 UTC. Cadence is "occasional regression
+    # check" not "every commit must pass."
+    - cron: "0 4 1 * *"
+
+concurrency:
+  group: llvm-bench-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  llvm:
+    name: LLVM ${{ matrix.llvm_subset }} via rivet
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Sub-tier: just LLVMSupport. ~10-15 min. Catches "does the
+          # cmake-drive even open the door on real LLVM."
+          - llvm_subset: support
+            ninja_targets: "LLVMSupport"
+
+          # Full-tier: Support + Core + IR + a single backend (X86).
+          # ~30-50 min. Real C++ template stress — std::variant,
+          # CRTP, parameter packs, big switches over enum classes.
+          - llvm_subset: core
+            ninja_targets: "LLVMSupport LLVMCore LLVMX86CodeGen LLVMTargetParser"
+
+    steps:
+      - name: Checkout rivet
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build deps
+        run: |
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build gcc-13 g++-13 \
+            libseccomp-dev libssl-dev
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100 \
+            --slave /usr/bin/g++ g++ /usr/bin/g++-13
+
+      # ── Build rivet itself (release) ─────────────────────────────────
+      - name: Configure rivet
+        run: cmake --preset release
+
+      - name: Build rivet
+        run: cmake --build --preset release --parallel
+
+      # ── Fetch the rivet toolchain (bundled clang + ninja) ────────────
+      - name: Install rivet toolchain
+        env:
+          RIVET_HOME: ${{ runner.temp }}/rivet-home
+        run: |
+          mkdir -p "$RIVET_HOME"
+          ./build/release/rivet toolchain install 19.1.7
+          ./build/release/rivet --version
+
+      # ── Pull LLVM source ─────────────────────────────────────────────
+      # 19.x.x mirrors the toolchain rivet ships — symmetric story for
+      # the timings ("rivet's own clang building its own LLVM").
+      - name: Fetch LLVM 19 source
+        env:
+          LLVM_TAG: llvmorg-19.1.7
+        run: |
+          set -eux
+          mkdir -p llvm-src && cd llvm-src
+          curl -fsSL -o llvm.tar.xz \
+            "https://github.com/llvm/llvm-project/releases/download/${LLVM_TAG}/llvm-project-${LLVM_TAG#llvmorg-}.src.tar.xz"
+          tar -xf llvm.tar.xz --strip-components=1
+          rm -f llvm.tar.xz
+          ls -la
+
+      # ── Drive the LLVM build via rivet ───────────────────────────────
+      # We don't use `rivet build` here because rivet's cmake-drive
+      # currently invokes `cmake --build <dir>` with no target arg — that
+      # would build everything in LLVM (hours). Instead:
+      #   1. rivet-generate the toolchain file (via a dummy build) to
+      #      pin clang/clang++/lld at the bundled paths.
+      #   2. Run cmake configure + ninja-targets directly so we can pick
+      #      which libs to build.
+      #
+      # The eventual rivet API for this is `rivet build --target=<name>`
+      # but it's not wired yet — see TODO in cmake_drive.cpp.
+      - name: cmake configure (rivet toolchain)
+        env:
+          RIVET_HOME: ${{ runner.temp }}/rivet-home
+        run: |
+          set -eux
+          # Borrow the toolchain file format from rivet's own cmake_drive.
+          # Equivalent to what `rivet build` would emit, just inline.
+          TC_FILE="$PWD/rivet-toolchain.cmake"
+          CLANG="$RIVET_HOME/toolchains/19.1.7/bin/clang"
+          CLANGPP="$RIVET_HOME/toolchains/19.1.7/bin/clang++"
+          AR="$RIVET_HOME/toolchains/19.1.7/bin/llvm-ar"
+          RANLIB="$RIVET_HOME/toolchains/19.1.7/bin/llvm-ranlib"
+          LD="$RIVET_HOME/toolchains/19.1.7/bin/ld.lld"
+          cat > "$TC_FILE" <<EOF
+          set(CMAKE_C_COMPILER   "$CLANG"   CACHE FILEPATH "")
+          set(CMAKE_CXX_COMPILER "$CLANGPP" CACHE FILEPATH "")
+          set(CMAKE_AR           "$AR"      CACHE FILEPATH "")
+          set(CMAKE_RANLIB       "$RANLIB"  CACHE FILEPATH "")
+          set(CMAKE_LINKER       "$LD"      CACHE FILEPATH "")
+          foreach(_v EXE SHARED MODULE)
+              set(CMAKE_\${_v}_LINKER_FLAGS_INIT "-fuse-ld=lld")
+          endforeach()
+          EOF
+          cat "$TC_FILE"
+
+          mkdir -p build
+          NINJA="$RIVET_HOME/toolchains/19.1.7/bin/ninja"
+          cmake \
+            -S llvm-src/llvm \
+            -B build \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$TC_FILE" \
+            -DCMAKE_MAKE_PROGRAM="$NINJA" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_TARGETS_TO_BUILD=X86 \
+            -DLLVM_ENABLE_PROJECTS= \
+            -DLLVM_ENABLE_RUNTIMES= \
+            -DLLVM_ENABLE_RTTI=OFF \
+            -DLLVM_ENABLE_EH=OFF \
+            -DLLVM_OPTIMIZED_TABLEGEN=ON \
+            -DLLVM_BUILD_TOOLS=OFF \
+            -DLLVM_BUILD_UTILS=OFF \
+            -DLLVM_BUILD_EXAMPLES=OFF \
+            -DLLVM_INCLUDE_TESTS=OFF \
+            -DLLVM_INCLUDE_BENCHMARKS=OFF \
+            -DLLVM_INCLUDE_EXAMPLES=OFF
+
+      - name: ninja build (target = ${{ matrix.ninja_targets }})
+        env:
+          RIVET_HOME: ${{ runner.temp }}/rivet-home
+        run: |
+          set -eux
+          NINJA="$RIVET_HOME/toolchains/19.1.7/bin/ninja"
+          t0=$(date +%s)
+          # shellcheck disable=SC2086
+          "$NINJA" -C build ${{ matrix.ninja_targets }}
+          t1=$(date +%s)
+          echo
+          echo "═══════════════════════════════════════════════"
+          echo "  LLVM ${{ matrix.llvm_subset }} via rivet-clang"
+          echo "  Elapsed: $((t1 - t0))s"
+          echo "═══════════════════════════════════════════════"
+          ls -lah build/lib/ | head -30
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llvm-${{ matrix.llvm_subset }}-build-log
+          path: |
+            build/CMakeFiles/CMakeOutput.log
+            build/CMakeFiles/CMakeError.log
+            build/.ninja_log
+          if-no-files-found: ignore
