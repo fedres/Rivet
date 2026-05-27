@@ -1,12 +1,41 @@
 // runtime/toolchain/compile.cpp — CompileJob → command translation
 #include "compile.hpp"
+#include "../../platform/interface/process.hpp"
 
 #include <algorithm>
 #include <format>
+#include <mutex>
 
 namespace rivet::toolchain {
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
+
+#if defined(__APPLE__)
+// Apple's headers (stdio.h, stdlib.h, string.h, ...) live inside the Xcode
+// SDK at /Applications/Xcode*.app/Contents/Developer/Platforms/MacOSX.platform/
+// Developer/SDKs/MacOSX.sdk — the bundled clang has no idea where that is.
+// Without -isysroot pointing at it, every translation unit fails on the
+// first <stdio.h> with "unknown type name 'size_t'" etc. (Caught by the
+// macOS smoke test at step 7.) Probe xcrun once, cache forever.
+static const std::string& macos_sdk_path() {
+    static std::once_flag once;
+    static std::string cached;
+    std::call_once(once, [] {
+        rivet::process::SpawnOptions opts;
+        opts.args = {"xcrun", "--show-sdk-path"};
+        opts.inherit_env    = true;
+        opts.capture_stdout = true;
+        opts.capture_stderr = true;
+        auto r = rivet::process::run(std::move(opts));
+        if (!r || r->exit_code != 0) return;
+        std::string out = r->stdout_output;
+        while (!out.empty() && (out.back() == '\n' || out.back() == '\r' || out.back() == ' '))
+            out.pop_back();
+        cached = std::move(out);
+    });
+    return cached;
+}
+#endif
 
 static std::string opt_flag(build::OptLevel opt) {
     switch (opt) {
@@ -34,6 +63,13 @@ Result<build::CompileCommand> make_compile_command(const CompileJob& job,
     args.push_back(opt_flag(job.opt));
     if (job.debug) args.push_back("-g");
     if (job.lto)   args.push_back("-flto=thin");
+
+#if defined(__APPLE__)
+    if (const auto& sdk = macos_sdk_path(); !sdk.empty()) {
+        args.push_back("-isysroot");
+        args.push_back(sdk);
+    }
+#endif
 
     // Target triple.
     if (!job.target_triple.empty()) {
@@ -95,6 +131,13 @@ Result<build::CompileCommand> make_link_command(const LinkJob& job,
 
     // Use lld.
     args.push_back("-fuse-ld=lld");
+
+#if defined(__APPLE__)
+    if (const auto& sdk = macos_sdk_path(); !sdk.empty()) {
+        args.push_back("-isysroot");
+        args.push_back(sdk);
+    }
+#endif
 
     // Sanitizers.
     if (!job.sanitizers.empty()) {
