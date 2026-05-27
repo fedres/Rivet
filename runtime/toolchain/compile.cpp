@@ -85,6 +85,18 @@ Result<build::CompileCommand> make_compile_command(const CompileJob& job,
     }
 #endif
 
+#if defined(_WIN32)
+    // Match vcpkg's x64-windows-static-rivet triplet (static CRT).
+    // Without this, clang++ defaults to /MD (dynamic CRT) and lld-link
+    // refuses to mix CRT-linked archives with the rest of the link line:
+    //   lld-link: error: /failifmismatch: mismatch detected for 'RuntimeLibrary'
+    // Use the release static CRT even for debug profiles — vcpkg installs
+    // release-CRT archives under lib/ and debug-CRT ones under debug/lib/
+    // which we don't yet wire up separately. Release CRT + -g compile flags
+    // is the cargo-on-Windows default and works fine.
+    args.push_back("-fms-runtime-lib=static");
+#endif
+
     // Target triple.
     if (!job.target_triple.empty()) {
         args.push_back("--target=" + job.target_triple);
@@ -151,6 +163,13 @@ Result<build::CompileCommand> make_link_command(const LinkJob& job,
         args.push_back("-isysroot");
         args.push_back(sdk);
     }
+#endif
+#if defined(_WIN32)
+    // Match the static CRT we compile against (see make_compile_command).
+    // Drives lld-link to pull in libcmt.lib / libucrt.lib rather than the
+    // /MD msvcrt.lib import-libs that would otherwise mismatch vcpkg's
+    // x64-windows-static archives.
+    args.push_back("-fms-runtime-lib=static");
 #endif
 
     // Sanitizers.
