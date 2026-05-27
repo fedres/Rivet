@@ -56,6 +56,7 @@ static void print_usage() {
         "  build       Build the current project\n"
         "  test        Run tests\n"
         "  run         Build and run the project binary\n"
+        "  exec        Run a binary shipped by a dependency (npm-exec-style)\n"
         "  add         Add a dependency\n"
         "  remove      Remove a dependency\n"
         "  fetch       Fetch + build all locked deps (--locked/--frozen for CI)\n"
@@ -82,6 +83,7 @@ int run(const Context& ctx) {
     if (sub == "build")    return cmd_build(ctx);
     if (sub == "test")     return cmd_test(ctx);
     if (sub == "run")      return cmd_run(ctx);
+    if (sub == "exec")     return cmd_exec(ctx);
     if (sub == "add")      return cmd_add(ctx);
     if (sub == "remove")   return cmd_remove(ctx);
     if (sub == "fetch")    return cmd_fetch(ctx);
@@ -837,6 +839,153 @@ int cmd_run(const Context& ctx) {
     }
     auto wait_r = child_r->wait();
     return wait_r.value_or(1);
+}
+
+// ─── cmd_exec ────────────────────────────────────────────────────────────────
+//
+// `rivet exec <name> [-- args...]` — run a binary that came in via the
+// dependency graph (cargo's npm-exec / `bundle exec` equivalent).
+//
+// Discovery searches the per-project vcpkg install tree:
+//   <rivet_home>/cache/deps/<root>/vcpkg-installed/<triplet>/
+//     tools/<port>/<name>[.exe]      ← canonical location for vcpkg tools
+//     bin/<name>[.exe]               ← occasional alt layout
+//
+// Each tools/<port>/ subdir gets prepended to the spawned child's PATH so
+// the binary can find sibling DLLs on Windows (vcpkg co-locates DLL
+// dependencies next to .exe).
+
+namespace exec_detail {
+
+// Append a directory to a PATH-style env var.
+std::string append_to_path(std::string current, std::string_view dir) {
+    if (dir.empty()) return current;
+#if defined(_WIN32)
+    const char sep = ';';
+#else
+    const char sep = ':';
+#endif
+    if (!current.empty()) current.push_back(sep);
+    current.append(dir);
+    return current;
+}
+
+struct ResolvedBinary {
+    Path binary;
+    std::vector<Path> sibling_dirs;  // dirs to prepend to PATH for DLL resolution
+};
+
+std::optional<ResolvedBinary>
+find_binary(const Path& install_root, std::string_view name) {
+#if defined(_WIN32)
+    std::string exe = std::string(name) + ".exe";
+#else
+    std::string exe = std::string(name);
+#endif
+
+    // 1) `tools/<port>/<name>` — preferred; vcpkg's canonical layout.
+    Path tools = install_root / "tools";
+    if (rivet::fs::exists(tools).value_or(false)) {
+        if (auto ports = rivet::fs::list_dir(tools)) {
+            for (const auto& port_dir : *ports) {
+                auto stat_r = rivet::fs::stat(port_dir);
+                if (!stat_r || !stat_r->is_dir) continue;
+                Path candidate = port_dir / exe;
+                if (rivet::fs::exists(candidate).value_or(false)) {
+                    ResolvedBinary out;
+                    out.binary = candidate;
+                    out.sibling_dirs.push_back(port_dir);
+                    return out;
+                }
+            }
+        }
+    }
+
+    // 2) `bin/<name>` — fallback for ports that drop binaries into the
+    //    runtime bin/ (e.g. anything that ships a shared library bundle).
+    Path bin_candidate = install_root / "bin" / exe;
+    if (rivet::fs::exists(bin_candidate).value_or(false)) {
+        ResolvedBinary out;
+        out.binary = bin_candidate;
+        out.sibling_dirs.push_back(install_root / "bin");
+        return out;
+    }
+
+    return std::nullopt;
+}
+
+} // namespace exec_detail
+
+int cmd_exec(const Context& ctx) {
+    auto args = ctx.args_after_subcommand();
+    if (args.empty()) {
+        std::cerr << "usage: rivet exec <name> [-- <args>]\n"
+                  << "       runs a binary shipped by one of this project's dependencies\n";
+        return 1;
+    }
+
+    std::string name{args[0]};
+
+    Path cwd = std::filesystem::current_path();
+    auto manifest_r = rivet::pkg::find_and_parse(cwd);
+    if (!manifest_r) {
+        std::cerr << "error: " << manifest_r.error().message << "\n"
+                  << "hint: rivet exec runs binaries fetched via dependencies; "
+                     "needs a rivet.toml in this dir or a parent.\n";
+        return 1;
+    }
+    const auto& manifest = *manifest_r;
+
+    auto home_r = rivet::env::rivet_home();
+    if (!home_r) {
+        std::cerr << "error: cannot determine rivet home: "
+                  << home_r.error().message << "\n";
+        return 1;
+    }
+    Path install_root = *home_r / "cache" / "deps" / manifest.name
+                        / "vcpkg-installed" / rivet::pkg::host_vcpkg_triplet();
+
+    auto resolved = exec_detail::find_binary(install_root, name);
+    if (!resolved) {
+        std::cerr << "error: no binary named '" << name << "' found in this project's deps.\n"
+                  << "       searched: " << install_root.string() << "/tools/*/" << name
+#if defined(_WIN32)
+                  << ".exe"
+#endif
+                  << "\n"
+                  << "hint: run 'rivet fetch' first, or check that the dependency that\n"
+                  << "      provides this tool is declared in rivet.toml.\n";
+        return 1;
+    }
+
+    // Collect args after `--` (cargo convention).
+    std::vector<std::string> child_args;
+    child_args.push_back(resolved->binary.string());
+    bool past_sep = false;
+    for (size_t i = 1; i < args.size(); ++i) {
+        if (args[i] == "--") { past_sep = true; continue; }
+        if (past_sep) child_args.emplace_back(args[i]);
+        else          child_args.emplace_back(args[i]);  // forward bare args too
+    }
+
+    rivet::process::SpawnOptions opts;
+    opts.args        = std::move(child_args);
+    opts.inherit_env = true;
+
+    // Prepend sibling_dirs to PATH so co-located DLLs / .dylibs resolve.
+    auto current_path = rivet::env::get("PATH").value_or("");
+    std::string augmented = current_path;
+    for (const auto& d : resolved->sibling_dirs)
+        augmented = exec_detail::append_to_path(d.string(), augmented);
+    opts.env["PATH"] = augmented;
+
+    auto child = rivet::process::spawn(std::move(opts));
+    if (!child) {
+        std::cerr << "error: " << child.error().message << "\n";
+        return 1;
+    }
+    auto code = child->wait();
+    return code.value_or(1);
 }
 
 // ─── cmd_add ─────────────────────────────────────────────────────────────────

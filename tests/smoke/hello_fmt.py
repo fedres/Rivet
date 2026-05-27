@@ -234,7 +234,27 @@ def main() -> None:
         if "hello M1" not in proc.stdout:
             sys.exit(f"M1 unexpected output: {proc.stdout!r}")
 
-        banner("SMOKE TEST PASSED (hello-fmt + M1 multi-target)")
+        # ── C2: rivet exec (binary-from-dep) sanity check ────────────────
+        # vcpkg always ships a `vcpkg` tool inside the bundled-vcpkg
+        # checkout we manage. It's not a dep-installed binary per se, but
+        # since rivet-fetch already runs vcpkg as the build driver, the
+        # binary is reliably present at <rivet_home>/sources/vcpkg/vcpkg
+        # — close enough to exercise the exec discovery path on every OS.
+        # The HELLO-FMT project doesn't add any binary-producing dep, so
+        # we just verify the command rejects unknown binaries cleanly.
+        banner("step 10: rivet exec (negative-path sanity)")
+        proc = subprocess.run(
+            [str(rivet_bin), "exec", "definitely-not-a-real-binary"],
+            cwd=str(project), env=env, capture_output=True, text=True, timeout=30,
+        )
+        print(f"exit:   {proc.returncode}", flush=True)
+        print(f"stderr: {proc.stderr!r}"[:400], flush=True)
+        if proc.returncode == 0:
+            sys.exit("rivet exec should fail on unknown binary")
+        if "no binary named" not in proc.stderr:
+            sys.exit(f"unexpected error message: {proc.stderr!r}")
+
+        banner("SMOKE TEST PASSED (hello-fmt + M1 multi-target + exec sanity)")
     except BaseException:
         failed = True
         raise
