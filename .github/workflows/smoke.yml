@@ -35,12 +35,9 @@ jobs:
           - os: macos-14
             runner: macos-14
             allow_failure: false
-          # Windows currently lacks Windows SDK auto-discovery — the smoke
-          # path will fail at `rivet fetch` until that lands. Run it anyway
-          # so we have a visible signal of when the gap closes.
           - os: windows-2022
             runner: windows-2022
-            allow_failure: true
+            allow_failure: false
 
     steps:
       - name: Checkout
@@ -220,10 +217,10 @@ jobs:
           set(CMAKE_CXX_STANDARD 17)
           add_executable(cmake_demo main.cpp)
           "@
-          Set-Content -Path (Join-Path $Demo "main.cpp") -Value @"
+          Set-Content -Path (Join-Path $Demo "main.cpp") -Value @'
           #include <iostream>
-          int main() { std::cout << ""hello from cmake-driven rivet\n""; return 0; }
-          "@
+          int main() { std::cout << "hello from cmake-driven rivet\n"; return 0; }
+          '@
           Push-Location $Demo
           $RivetExe = Join-Path $env:GITHUB_WORKSPACE 'build\release\rivet.exe'
           & $RivetExe build
