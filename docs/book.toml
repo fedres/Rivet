@@ -5,13 +5,14 @@ src         = "."
 language    = "en"
 
 [output.html]
-default-theme    = "navy"
+default-theme        = "navy"
 preferred-dark-theme = "navy"
-git-repository-url     = "https://github.com/fedres/Rivet"
-edit-url-template      = "https://github.com/fedres/Rivet/edit/main/docs/{path}"
-site-url               = "/Rivet/book/"
-no-section-label       = true
-mathjax-support        = false
+additional-css       = ["theme/custom.css"]
+git-repository-url   = "https://github.com/fedres/Rivet"
+edit-url-template    = "https://github.com/fedres/Rivet/edit/main/docs/{path}"
+site-url             = "/Rivet/book/"
+no-section-label     = true
+mathjax-support      = false
 
 [output.html.search]
 enable        = true

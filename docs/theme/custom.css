@@ -1,0 +1,273 @@
+/* mdBook theme override — match the landing page's terminal aesthetic.
+ *
+ * Targets the `navy` base theme (book.toml: default-theme = "navy") and
+ * pulls the palette in line with docs/site/style.css so navigating from
+ * the landing into the reference docs feels seamless.
+ */
+
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;700&display=swap");
+
+/* Override navy's CSS variables. */
+.navy {
+    --bg: #0a0e14;
+    --fg: #d7e0eb;
+
+    --sidebar-bg: #0e131b;
+    --sidebar-fg: #9aa6b6;
+    --sidebar-non-existant: #4a5260;
+    --sidebar-active: #6ad79b;
+    --sidebar-spacer: #1f2630;
+
+    --scrollbar: #1f2630;
+
+    --icons: #6c7681;
+    --icons-hover: #6ad79b;
+
+    --links: #5fdaff;
+
+    --inline-code-color: #6ad79b;
+    --theme-popup-bg: #141a24;
+    --theme-popup-border: #1f2630;
+    --theme-hover: #1f2630;
+
+    --quote-bg: #0e131b;
+    --quote-border: #1f2630;
+
+    --warning-border: #ffba6f;
+
+    --table-border-color: #1f2630;
+    --table-header-bg: #141a24;
+    --table-alternate-bg: #0e131b;
+
+    --searchbar-border-color: #1f2630;
+    --searchbar-bg: #141a24;
+    --searchbar-fg: #d7e0eb;
+    --searchbar-shadow-color: #00000080;
+    --searchresults-header-fg: #9aa6b6;
+    --searchresults-border-color: #1f2630;
+    --searchresults-li-bg: #0e131b;
+    --search-mark-bg: #ffba6f;
+
+    --color-scheme: dark;
+}
+
+/* Body & typography */
+.navy body, .navy {
+    background: radial-gradient(
+            ellipse at 50% -10%,
+            rgba(106, 215, 155, 0.06) 0%,
+            transparent 60%
+        )
+        var(--bg);
+    color: var(--fg);
+    font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+}
+
+.navy code,
+.navy pre,
+.navy .hljs {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.92em;
+}
+
+/* Chrome / nav bar */
+.navy .menu-bar {
+    background: rgba(10, 14, 20, 0.85);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid #1f2630;
+}
+.navy .menu-bar .menu-title {
+    font-family: "JetBrains Mono", monospace;
+    font-weight: 500;
+    color: var(--fg);
+}
+.navy .menu-bar i,
+.navy .menu-bar .icon-button {
+    color: var(--icons);
+}
+.navy .menu-bar .icon-button:hover {
+    color: var(--icons-hover);
+}
+
+/* Sidebar */
+.navy .sidebar {
+    background: var(--sidebar-bg);
+    border-right: 1px solid #1f2630;
+}
+.navy .chapter li.chapter-item {
+    color: var(--sidebar-fg);
+}
+.navy .chapter li.chapter-item a {
+    color: var(--sidebar-fg);
+}
+.navy .chapter li.chapter-item a:hover {
+    color: var(--fg);
+}
+.navy .chapter li.chapter-item.expanded > a.active,
+.navy .chapter li.chapter-item > a.active {
+    color: var(--sidebar-active) !important;
+    font-weight: 500;
+}
+.navy .chapter li.part-title {
+    color: #6c7681;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.78em;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+/* Content */
+.navy .content {
+    color: var(--fg);
+}
+.navy .content h1,
+.navy .content h2,
+.navy .content h3,
+.navy .content h4,
+.navy .content h5,
+.navy .content h6 {
+    color: var(--fg);
+    font-family: "Inter", system-ui, sans-serif;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+}
+.navy .content h1 {
+    background: linear-gradient(135deg, #6ad79b 0%, #5fdaff 50%, #ff7ad6 100%);
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    border-bottom: none;
+    padding-bottom: 0.4em;
+}
+.navy .content h2 {
+    margin-top: 2.2em;
+    padding-bottom: 0.3em;
+    border-bottom: 1px solid #1f2630;
+}
+.navy .content a {
+    color: var(--links);
+}
+.navy .content a:hover {
+    text-decoration: underline;
+    text-decoration-color: var(--links);
+    text-underline-offset: 3px;
+}
+
+/* Inline + block code */
+.navy .content code {
+    background: #141a24;
+    border: 1px solid #1f2630;
+    border-radius: 4px;
+    padding: 1px 6px;
+    color: var(--inline-code-color);
+}
+.navy .content pre {
+    background: #0e131b;
+    border: 1px solid #1f2630;
+    border-radius: 6px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    box-shadow: 0 0 0 1px rgba(106, 215, 155, 0.03);
+}
+.navy .content pre code {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    color: var(--fg);
+}
+
+/* highlight.js token overrides — match the landing's accent palette. */
+.navy .hljs-keyword,
+.navy .hljs-selector-tag,
+.navy .hljs-section,
+.navy .hljs-title.class_ {
+    color: #ff7ad6;
+}
+.navy .hljs-string,
+.navy .hljs-attr,
+.navy .hljs-template-variable {
+    color: #6ad79b;
+}
+.navy .hljs-number,
+.navy .hljs-literal,
+.navy .hljs-built_in {
+    color: #ffba6f;
+}
+.navy .hljs-comment,
+.navy .hljs-meta {
+    color: #6c7681;
+    font-style: italic;
+}
+.navy .hljs-type,
+.navy .hljs-symbol,
+.navy .hljs-bullet,
+.navy .hljs-addition {
+    color: #5fdaff;
+}
+.navy .hljs-name,
+.navy .hljs-tag,
+.navy .hljs-attribute {
+    color: #5fdaff;
+}
+
+/* Tables */
+.navy .content table {
+    border: 1px solid #1f2630;
+    border-radius: 6px;
+    border-collapse: separate;
+    border-spacing: 0;
+    overflow: hidden;
+}
+.navy .content table th {
+    background: #141a24;
+    color: #9aa6b6;
+    border-bottom: 1px solid #1f2630;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.86em;
+    font-weight: 500;
+    text-align: left;
+}
+.navy .content table td {
+    border-bottom: 1px solid #1f2630;
+    border-right: 0;
+}
+.navy .content table tr:last-child td {
+    border-bottom: 0;
+}
+.navy .content table tr:nth-child(even) td {
+    background: #0e131b;
+}
+
+/* Blockquotes */
+.navy .content blockquote {
+    background: var(--quote-bg);
+    border-left: 2px solid #6ad79b;
+    color: var(--fg);
+}
+
+/* Search */
+.navy #searchbar {
+    background: var(--searchbar-bg);
+    border: 1px solid #1f2630;
+    color: var(--fg);
+    font-family: "JetBrains Mono", monospace;
+}
+.navy #searchresults-outer {
+    background: #0e131b;
+    border: 1px solid #1f2630;
+}
+
+/* Footer / pagination */
+.navy .nav-chapters {
+    color: var(--sidebar-fg);
+}
+.navy .nav-chapters:hover {
+    color: var(--sidebar-active);
+}
+
+/* Print theme picker (top-right) — hide it since we ship a single
+   custom theme matching the landing; switching to "light" breaks the
+   look-and-feel match. */
+.navy #theme-list { display: none; }
+.navy #theme-toggle { opacity: 0.4; pointer-events: none; }
