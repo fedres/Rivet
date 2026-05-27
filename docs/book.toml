@@ -1,0 +1,22 @@
+[book]
+title       = "Rivet"
+description = "A self-contained, cross-platform C++ build system and package manager"
+src         = "."
+language    = "en"
+
+[output.html]
+default-theme    = "navy"
+preferred-dark-theme = "navy"
+git-repository-url     = "https://github.com/fedres/Rivet"
+edit-url-template      = "https://github.com/fedres/Rivet/edit/main/docs/{path}"
+site-url               = "/Rivet/"
+no-section-label       = true
+mathjax-support        = false
+
+[output.html.search]
+enable        = true
+limit-results = 30
+
+[output.html.fold]
+enable = true
+level  = 1

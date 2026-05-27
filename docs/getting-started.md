@@ -1,0 +1,109 @@
+# Getting Started
+
+Five minutes from "I've never run rivet" to "I have a binary".
+
+## 1. Install
+
+```bash
+# Linux / macOS
+curl -fsSL https://github.com/fedres/Rivet/releases/latest/download/install.sh | sh
+
+# Windows (PowerShell)
+irm https://github.com/fedres/Rivet/releases/latest/download/install.ps1 | iex
+```
+
+The installer drops a `rivet` binary into `~/.rivet/bin/` (Linux/macOS) or
+`%USERPROFILE%\.rivet\bin\` (Windows) and adds it to your `PATH`. Restart
+your shell so the change takes effect.
+
+```bash
+rivet --version
+# rivet 0.1.0 (...)
+```
+
+### Platform prereqs
+
+Rivet ships its own clang and libc++. It cannot ship Apple's frameworks or
+Microsoft's Windows SDK — those are licensed and we'd violate the EULA.
+Same prereq as cargo, zig, brew, every C++ tool:
+
+| Platform | Prereq | How |
+|---|---|---|
+| **Linux** | none | glibc + kernel headers come with every distro |
+| **macOS** | Xcode Command Line Tools | `xcode-select --install` (one-time, ~1 GB) |
+| **Windows** | Visual Studio Build Tools 2022 | the installer offers a `winget install` flow |
+
+On Windows, `install.ps1` calls `vswhere` to detect existing VS installs;
+if none found it offers to run
+
+```powershell
+winget install --id Microsoft.VisualStudio.2022.BuildTools `
+  --override "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+```
+
+Set `$env:RIVET_AUTO_INSTALL_VS=1` to skip the prompt.
+
+## 2. Install a toolchain
+
+```bash
+rivet toolchain install 19.1.7
+```
+
+Pulls a ~600 MB platform-specific LLVM bundle (clang, clang++, lld, libc++,
+llvm-rc on Windows) from the project's release page and extracts it under
+`~/.rivet/toolchains/19.1.7/`. Subsequent commands use it automatically.
+
+## 3. New project
+
+```bash
+rivet new hello-fmt
+cd hello-fmt
+```
+
+This creates:
+
+```
+hello-fmt/
+├── rivet.toml      # package manifest
+├── src/
+│   └── main.cpp    # "Hello, World!" stub
+└── .gitignore
+```
+
+## 4. Add a dependency
+
+```bash
+rivet add fmt
+```
+
+`fmt` resolves through vcpkg as a backend. You'll never need to type `vcpkg`.
+The manifest gains a `[dependencies]` entry and `rivet.lock` is created.
+
+## 5. Use it
+
+```cpp
+// src/main.cpp
+#include <fmt/core.h>
+int main() {
+    fmt::print("hello from fmt {}\n", 42);
+    return 0;
+}
+```
+
+## 6. Build + run
+
+```bash
+rivet fetch    # vcpkg builds fmt against the bundled clang (slow first time)
+rivet build    # compiles main.cpp against fmt, produces the binary
+rivet run      # → hello from fmt 42
+```
+
+The binary lives at `.rivet/build/debug/bin/hello-fmt`.
+
+## Where to next?
+
+- [Manifest reference](manifest.md) — every field in `rivet.toml`
+- [CLI reference](cli.md) — every subcommand
+- [Building rivet itself](building.md) — for contributors
+- [Toolchain bundles](toolchain-bundles.md) — how the LLVM bundles are
+  produced and published
