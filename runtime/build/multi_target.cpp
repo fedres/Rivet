@@ -364,21 +364,56 @@ build_targets(const pkg::Manifest& manifest,
             lj.lto           = base_cfg.lto;
             lj.sanitizers    = base_cfg.sanitizers;
 
-            // Intra-manifest deps: pull their archive paths in as link inputs
-            // and add an edge in the build graph.
+            // Intra-manifest deps: pull every TRANSITIVE archive in as a
+            // link input, plus the dep's cfg-active link_libs (system libs
+            // that the dep itself requires, e.g. -framework on macOS or
+            // -lssl on linux). Static-archive linking is order-sensitive on
+            // POSIX ld — dependents come first, dependencies last — so we
+            // emit in DFS order from the user's target outwards. by_name
+            // already holds artefacts in build order (deepest deps first)
+            // because we populate it as we iterate the topo order, but
+            // that's not the right order for *linking* — we need the
+            // visit-from-root order.
             std::vector<TaskId> dep_task_ids;
-            for (const auto& dep_name : tgt.depends_on) {
-                auto it = by_name.find(dep_name);
-                if (it == by_name.end())
-                    return make_error<std::vector<TargetArtifact>>(
-                        "target '" + tgt.name + "' depends on unknown '" + dep_name + "'");
-                if (it->second.kind != pkg::TargetKind::Lib
-                 && it->second.kind != pkg::TargetKind::Vendor)
-                    return make_error<std::vector<TargetArtifact>>(
-                        "target '" + tgt.name + "' depends on '" + dep_name +
-                        "' which is not a lib/vendor");
-                lj.inputs.push_back(it->second.artifact_path);
-                dep_task_ids.push_back(it->second.final_task);
+            {
+                std::unordered_set<std::string> seen;
+                std::function<Result<void>(const std::string&)> visit =
+                    [&](const std::string& dep_name) -> Result<void> {
+                    if (!seen.insert(dep_name).second) return {};
+                    auto by_it = by_name.find(dep_name);
+                    if (by_it == by_name.end())
+                        return make_error("target '" + tgt.name +
+                            "' depends on unknown '" + dep_name + "'");
+                    if (by_it->second.kind != pkg::TargetKind::Lib
+                     && by_it->second.kind != pkg::TargetKind::Vendor)
+                        return make_error("target '" + tgt.name +
+                            "' depends on '" + dep_name +
+                            "' which is not a lib/vendor");
+
+                    lj.inputs.push_back(by_it->second.artifact_path);
+                    dep_task_ids.push_back(by_it->second.final_task);
+
+                    // Look up the original target to recurse into its own
+                    // depends_on AND pull in its cfg-active link_libs.
+                    const pkg::Target* dep_tgt = nullptr;
+                    for (const auto& t : manifest.targets)
+                        if (t.name == dep_name) { dep_tgt = &t; break; }
+                    if (!dep_tgt) return {};  // shouldn't happen
+                    for (const auto& l : dep_tgt->link_libs) lj.flags.push_back(l);
+                    for (const auto& ov : dep_tgt->cfg_overrides) {
+                        if (!cfg_matches_host(ov.cfg)) continue;
+                        for (const auto& l : ov.extra_link_libs)
+                            lj.flags.push_back(l);
+                    }
+                    for (const auto& sub : dep_tgt->depends_on)
+                        RIVET_TRY(visit(sub));
+                    return {};
+                };
+                for (const auto& dep_name : tgt.depends_on) {
+                    auto vr = visit(dep_name);
+                    if (!vr)
+                        return make_error<std::vector<TargetArtifact>>(vr.error().message);
+                }
             }
 
             // External deps from rivet.toml [dependencies] (already
