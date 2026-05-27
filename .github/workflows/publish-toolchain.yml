@@ -120,6 +120,28 @@ jobs:
           for dll in extract/bin/*.dll; do
             [ -e "$dll" ] && cp -a "$dll" keep/bin/ || true
           done
+          # ── Bundle ninja (M2 prereq for the CMake-driving path) ────────
+          # Ninja is a single ~500 KB statically-linked binary that cmake
+          # uses as its build executor. Including it in the toolchain
+          # bundle means rivet's CMake-interception path (`rivet build` on
+          # a project with CMakeLists.txt but no rivet.toml) doesn't need
+          # to shell out to a host ninja that may not be installed.
+          NINJA_VERSION=1.12.1
+          case "${{ matrix.target }}" in
+            x86_64-linux-gnu)        NINJA_ASSET=ninja-linux.zip       ; NINJA_BIN=ninja      ;;
+            arm64-linux-gnu)         NINJA_ASSET=ninja-linux-aarch64.zip ; NINJA_BIN=ninja      ;;
+            arm64-apple-macos)       NINJA_ASSET=ninja-mac.zip         ; NINJA_BIN=ninja      ;;
+            x86_64-windows-msvc)     NINJA_ASSET=ninja-win.zip         ; NINJA_BIN=ninja.exe  ;;
+            *) NINJA_ASSET= ;;
+          esac
+          if [ -n "$NINJA_ASSET" ]; then
+            NINJA_URL="https://github.com/ninja-build/ninja/releases/download/v${NINJA_VERSION}/${NINJA_ASSET}"
+            echo "Downloading ninja: $NINJA_URL"
+            curl -fsSL -o ninja.zip "$NINJA_URL"
+            unzip -j ninja.zip "$NINJA_BIN" -d keep/bin/
+            chmod +x "keep/bin/$NINJA_BIN" || true
+            rm ninja.zip
+          fi
           # Headers: libc++ + clang builtins.
           [ -d extract/include/c++ ] && { mkdir -p keep/include; cp -a extract/include/c++ keep/include/; } || true
           # Clang resource dir (multiple major versions may coexist).

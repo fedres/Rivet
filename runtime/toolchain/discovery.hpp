@@ -45,6 +45,8 @@ struct ToolchainInfo {
     [[nodiscard]] Path llvm_lib()    const { return root / "bin" / (std::string("llvm-lib") + exe_suffix); }
     [[nodiscard]] Path llvm_strip()  const { return root / "bin" / (std::string("llvm-strip") + exe_suffix); }
     [[nodiscard]] Path scan_deps()   const { return root / "bin" / (std::string("clang-scan-deps") + exe_suffix); }
+    // ninja is bundled alongside clang for the M2 CMake-driving path.
+    [[nodiscard]] Path ninja()       const { return root / "bin" / (std::string("ninja") + exe_suffix); }
 
     [[nodiscard]] Path compiler_rt_dir() const {
         return root / "lib" / "clang" / version / "lib";
