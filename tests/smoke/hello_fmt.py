@@ -131,7 +131,11 @@ def main() -> None:
         print(f"wrote {main_cpp}", flush=True)
 
         banner("step 5: rivet add fmt")
-        run([str(rivet_bin), "add", "fmt"], cwd=project, env=env, timeout=120)
+        # First call on a cold runner bootstraps the vcpkg index — can run
+        # tens of seconds longer on a flaky network. Generous timeout to
+        # ride out CI variance; the body still completes in <5s most of
+        # the time.
+        run([str(rivet_bin), "add", "fmt"], cwd=project, env=env, timeout=600)
 
         banner("step 6: rivet fetch  (vcpkg builds fmt — slow)")
         try:

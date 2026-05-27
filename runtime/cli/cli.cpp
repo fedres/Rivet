@@ -369,12 +369,13 @@ int cmd_build(const Context& ctx) {
                         continue;
                     }
                     if (f.starts_with("-l")) {
-#if defined(_WIN32)
-                        // `foo.lib` (or `foo` — lld-link tries both).
-                        deps.link_flags.push_back(f.substr(2) + ".lib");
-#else
+                        // clang++ accepts `-lfoo` on every host, including
+                        // Windows MSVC ABI — the driver knows to translate
+                        // to `foo.lib` when invoking lld-link. (Our earlier
+                        // attempt at translating ourselves emitted
+                        // `fmt.lib` as a positional arg that clang then
+                        // treated as a filename relative to cwd and lost.)
                         deps.link_flags.push_back(f);
-#endif
                         continue;
                     }
                     // Pass everything else (raw paths, `-static`, etc.)
