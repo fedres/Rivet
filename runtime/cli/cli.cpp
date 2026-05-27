@@ -336,13 +336,49 @@ int cmd_build(const Context& ctx) {
                         deps.compile_flags.push_back(f);
                     }
                 }
-                for (const auto& f : resolved->libs) {
+                // Translate POSIX pkg-config flags to per-platform link
+                // tokens. pkg-config files always speak POSIX (`-lfoo`,
+                // `-framework`, `-pthread`); on Windows MSVC ABI the
+                // canonical form is `foo.lib` as a positional arg, and
+                // `-framework`/`-pthread` don't exist. macOS keeps the
+                // POSIX form (clang understands `-framework Foo` and
+                // `-lfoo` natively); Linux ditto.
+                for (size_t i = 0; i < resolved->libs.size(); ++i) {
+                    const auto& f = resolved->libs[i];
                     if (f.starts_with("-L")) {
                         Path p{f.substr(2)};
                         if (p != lib_dir) deps.lib_dirs.push_back(std::move(p));
-                    } else {
-                        deps.link_flags.push_back(f);
+                        continue;
                     }
+                    if (f == "-framework" && i + 1 < resolved->libs.size()) {
+                        // Apple-only two-token sequence. On other
+                        // platforms drop the pair entirely — referencing
+                        // a framework on Linux/Windows is a no-op at best.
+#if defined(__APPLE__)
+                        deps.link_flags.push_back(f);
+                        deps.link_flags.push_back(resolved->libs[i + 1]);
+#endif
+                        ++i;  // skip the framework name regardless
+                        continue;
+                    }
+                    if (f == "-pthread") {
+#if !defined(_WIN32)
+                        deps.link_flags.push_back(f);
+#endif
+                        continue;
+                    }
+                    if (f.starts_with("-l")) {
+#if defined(_WIN32)
+                        // `foo.lib` (or `foo` — lld-link tries both).
+                        deps.link_flags.push_back(f.substr(2) + ".lib");
+#else
+                        deps.link_flags.push_back(f);
+#endif
+                        continue;
+                    }
+                    // Pass everything else (raw paths, `-static`, etc.)
+                    // through verbatim.
+                    deps.link_flags.push_back(f);
                 }
             }
         }
