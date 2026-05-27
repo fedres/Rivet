@@ -288,6 +288,36 @@ int cmd_build(const Context& ctx) {
         return 1;
     }
 
+    // ── [build] system = "cmake": manifest exists but the project's build
+    // rules live in a CMakeLists.txt rather than rivet.toml. The user gets
+    // rivet's package management (rivet add / rivet fetch) plus cmake's
+    // build expressiveness. Dispatch to the cmake-drive path with the
+    // per-project vcpkg-installed tree pre-wired into CMAKE_PREFIX_PATH.
+    if (manifest.build.system == rivet::pkg::BuildSystem::CMake) {
+        if (!rivet::fs::exists(manifest.root_dir / "CMakeLists.txt").value_or(false)) {
+            std::cerr << "error: [build] system = \"cmake\" but no CMakeLists.txt "
+                         "at " << manifest.root_dir.string() << "\n";
+            return 1;
+        }
+        rivet::build::CmakeDriveOptions copts;
+        copts.project_dir    = manifest.root_dir;
+        copts.toolchain_root = tc.root;
+        copts.profile        = std::string{flag_value(args, "--profile").value_or("debug")};
+        Path candidate = *rivet_home_r / "cache" / "deps" / manifest.name
+                         / "vcpkg-installed" / rivet::pkg::host_vcpkg_triplet();
+        if (rivet::fs::exists(candidate).value_or(false))
+            copts.extra_prefix = candidate;
+        std::cout << std::format(
+            "Building {} {} [{}] via cmake-drive with clang {}\n",
+            manifest.name, manifest.version, copts.profile, tc.version);
+        auto r = rivet::build::build_via_cmake(copts, tc);
+        if (!r) {
+            std::cerr << "error: " << r.error().message << "\n";
+            return 1;
+        }
+        return 0;
+    }
+
     // 3. Determine build profile and configuration.
     auto profile_name = std::string{flag_value(args, "--profile").value_or("debug")};
     bool is_release   = (profile_name == "release");

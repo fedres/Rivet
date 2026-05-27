@@ -139,6 +139,7 @@ jobs:
           ./build/release/rivet toolchain install 19.1.7
           DEMO="$(mktemp -d)/cmake-demo"
           mkdir -p "$DEMO"
+          # Simple cmake-only project (no rivet.toml).
           cat > "$DEMO/CMakeLists.txt" <<'CMAKE'
           cmake_minimum_required(VERSION 3.20)
           project(cmake_demo LANGUAGES CXX)
@@ -150,13 +151,56 @@ jobs:
           int main() { std::cout << "hello from cmake-driven rivet\n"; return 0; }
           CPP
           cd "$DEMO"
-          ../../*/release/rivet build || true   # noop fallback; next line is the real call
           "$GITHUB_WORKSPACE/build/release/rivet" build
-          # Locate the binary (cmake's exe name = target name).
           BIN="$(find .rivet/cmake -maxdepth 4 -type f -name cmake_demo | head -1)"
           test -n "$BIN" || { echo "binary not produced"; ls -la .rivet/cmake; exit 1; }
           OUT="$($BIN)"
           test "$OUT" = "hello from cmake-driven rivet"
+
+      # Bigger M2 case: rivet.toml + CMakeLists.txt + find_package(fmt).
+      # Exercises the [build] system = "cmake" dispatch, the per-project
+      # vcpkg-installed CMAKE_PREFIX_PATH wiring, and the find_package
+      # interception logger.
+      - name: M2 cmake-drive with deps (rivet.toml + find_package, Unix)
+        if: runner.os != 'Windows'
+        continue-on-error: ${{ matrix.allow_failure }}
+        env:
+          RIVET_HOME: ${{ runner.temp }}/rivet-cmake-deps-home
+        run: |
+          set -eux
+          mkdir -p "$RIVET_HOME"
+          "$GITHUB_WORKSPACE/build/release/rivet" toolchain install 19.1.7
+          DEMO="$(mktemp -d)/cmake-fmt-demo"
+          mkdir -p "$DEMO" && cd "$DEMO"
+          cat > rivet.toml <<'TOML'
+          [package]
+          name = "cmake_fmt_demo"
+          version = "0.1.0"
+
+          [build]
+          system = "cmake"
+
+          [dependencies]
+          fmt = "*"
+          TOML
+          cat > CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(cmake_fmt_demo LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 17)
+          find_package(fmt CONFIG REQUIRED)
+          add_executable(cmake_fmt_demo main.cpp)
+          target_link_libraries(cmake_fmt_demo PRIVATE fmt::fmt)
+          CMAKE
+          cat > main.cpp <<'CPP'
+          #include <fmt/core.h>
+          int main() { fmt::print("cmake+rivet+fmt = {}\n", 42); return 0; }
+          CPP
+          "$GITHUB_WORKSPACE/build/release/rivet" fetch
+          "$GITHUB_WORKSPACE/build/release/rivet" build
+          BIN="$(find .rivet/cmake -maxdepth 4 -type f -name cmake_fmt_demo | head -1)"
+          test -n "$BIN" || { echo "binary not produced"; ls -la .rivet/cmake; exit 1; }
+          OUT="$($BIN)"
+          test "$OUT" = "cmake+rivet+fmt = 42"
 
       - name: M2 cmake-drive (rivet builds a cmake project, Windows)
         if: runner.os == 'Windows'
