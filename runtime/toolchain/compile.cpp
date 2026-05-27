@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <format>
+#include <iostream>
 #include <mutex>
 
 namespace rivet::toolchain {
@@ -50,15 +51,57 @@ static std::string opt_flag(build::OptLevel opt) {
 
 // ─── make_compile_command() ──────────────────────────────────────────────────
 
+// Classify a source-file extension into a compile mode. Centralised so the
+// dispatch table is one place to read instead of a chain of conditionals.
+//
+// Hardened against two real footguns:
+//   1. A header file (.h/.hpp/.hh/.hxx/.h++/.inl/.ipp) accidentally listed
+//      under `sources = [...]`. clang will dutifully drive the header as a
+//      TU, emit a redundant .o, and produce confusing duplicate-symbol
+//      errors at link time.
+//   2. An unrecognised extension silently routing to C++ — the previous
+//      "everything else → c++" rule worked for .cpp/.cc but quietly
+//      mis-compiled .s/.S as C++, and gave no signal for typos.
+namespace {
+
+enum class SourceKind { C, CXX, Header, Unknown };
+
+SourceKind classify_extension(const std::string& ext) {
+    if (ext == ".c")                              return SourceKind::C;
+    if (ext == ".cpp" || ext == ".cc"  ||
+        ext == ".cxx" || ext == ".C"   ||
+        ext == ".c++")                            return SourceKind::CXX;
+    if (ext == ".h"   || ext == ".hpp" ||
+        ext == ".hh"  || ext == ".hxx" ||
+        ext == ".h++" || ext == ".inl" ||
+        ext == ".ipp" || ext == ".tpp")           return SourceKind::Header;
+    return SourceKind::Unknown;
+}
+
+} // namespace
+
 Result<build::CompileCommand> make_compile_command(const CompileJob& job,
                                                     const ToolchainInfo& tc) {
     build::CompileCommand cmd;
-    // Dispatch on source extension: `.c` → C compiler (clang), everything
-    // else → C++ compiler (clang++). Without this the bundled clang++ drives
-    // C amalgamations (vendored sqlite, libzstd) as if they were C++, which
-    // breaks on K&R prototypes / typedef redefinitions / `register` use.
-    auto ext = job.source.extension().string();
-    bool is_c = (ext == ".c");
+
+    auto ext  = job.source.extension().string();
+    auto kind = classify_extension(ext);
+
+    if (kind == SourceKind::Header) {
+        return make_error<build::CompileCommand>(std::format(
+            "source '{}' is a header file ({}) — headers must not appear in "
+            "`sources = [...]`; remove it from the manifest target",
+            job.source.string(), ext));
+    }
+    if (kind == SourceKind::Unknown) {
+        std::cerr << "warning: source '" << job.source.string()
+                  << "' has unrecognised extension '" << ext
+                  << "' — compiling as C++ (rename to .cpp/.cc/.cxx, or "
+                  << "add .c for a C source)\n";
+        kind = SourceKind::CXX;
+    }
+
+    bool is_c = (kind == SourceKind::C);
     cmd.executable   = (is_c ? tc.clang() : tc.clangpp()).string();
     cmd.working_dir  = job.source.parent_path();
 
@@ -66,8 +109,7 @@ Result<build::CompileCommand> make_compile_command(const CompileJob& job,
 
     // Standard language options. `-std=c++NN` is meaningless to clang in
     // C mode — let .c sources go in with the toolchain default (C17 since
-    // clang-17), explicitly tag the compile as C/C++ via -x so a file with
-    // an unrecognised extension (e.g. .S, .cxx) still routes correctly.
+    // clang-17), explicitly tag the compile as C/C++ via -x.
     if (is_c) {
         args.push_back("-x"); args.push_back("c");
     } else {
