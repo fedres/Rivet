@@ -163,6 +163,14 @@ compile_flags = [
     "-Wno-missing-field-initializers",
 ]
 
+# rivet_runtime transitively includes windows.h (via WinHTTP / WinSock in
+# the PAL headers); NOMINMAX + WIN32_LEAN_AND_MEAN have to be on this
+# target's compile line too. CMake propagates them PUBLIC from rivet_pal;
+# rivet.toml doesn't yet support PUBLIC defines so we just re-declare.
+[[lib.cfg]]
+os = "windows"
+compile_flags = ["-DWIN32_LEAN_AND_MEAN", "-DNOMINMAX", "-DUNICODE", "-D_UNICODE"]
+
 # ─── rivet — the binary ──────────────────────────────────────────────────────
 
 [[bin]]
