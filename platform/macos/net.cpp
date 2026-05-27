@@ -97,20 +97,53 @@ struct TlsConn {
         if (!ctx) return make_error("SSLCreateContext failed");
 
         // I/O callbacks: read/write through our plain socket fd.
+        // SecureTransport I/O callbacks. Contract (per Apple docs): return
+        // noErr only when *len == requested; on partial completion return
+        // errSSLWouldBlock with *len == bytes-actually-transferred so the
+        // SSL state machine knows to retry. Returning noErr on a partial
+        // read makes SSLRead surface truncated bodies as successful empty
+        // responses — that's what bit the macOS smoke run downloading the
+        // 700 MB toolchain bundle from objects.githubusercontent.com.
+        //
+        // Our sockets are blocking, so we loop until the full requested
+        // amount is read/written. Partial only happens on EOF or error.
         SSLSetIOFuncs(ctx,
             [](SSLConnectionRef conn, void* data, size_t* len) -> OSStatus {
-                int fd = static_cast<int>(reinterpret_cast<intptr_t>(conn));
-                ssize_t n = ::read(fd, data, *len);
-                if (n < 0) { *len = 0; return errSSLClosedAbort; }
-                if (n == 0) { *len = 0; return errSSLClosedGraceful; }
-                *len = static_cast<size_t>(n);
+                int    fd   = static_cast<int>(reinterpret_cast<intptr_t>(conn));
+                size_t want = *len;
+                size_t got  = 0;
+                char*  p    = static_cast<char*>(data);
+                while (got < want) {
+                    ssize_t n = ::read(fd, p + got, want - got);
+                    if (n < 0) {
+                        if (errno == EINTR) continue;
+                        *len = got;
+                        return errSSLClosedAbort;
+                    }
+                    if (n == 0) {
+                        *len = got;
+                        return errSSLClosedGraceful;
+                    }
+                    got += static_cast<size_t>(n);
+                }
+                *len = got;
                 return noErr;
             },
             [](SSLConnectionRef conn, const void* data, size_t* len) -> OSStatus {
-                int fd = static_cast<int>(reinterpret_cast<intptr_t>(conn));
-                ssize_t n = ::write(fd, data, *len);
-                if (n < 0) { *len = 0; return errSSLClosedAbort; }
-                *len = static_cast<size_t>(n);
+                int         fd   = static_cast<int>(reinterpret_cast<intptr_t>(conn));
+                size_t      want = *len;
+                size_t      sent = 0;
+                const char* p    = static_cast<const char*>(data);
+                while (sent < want) {
+                    ssize_t n = ::write(fd, p + sent, want - sent);
+                    if (n < 0) {
+                        if (errno == EINTR) continue;
+                        *len = sent;
+                        return errSSLClosedAbort;
+                    }
+                    sent += static_cast<size_t>(n);
+                }
+                *len = sent;
                 return noErr;
             });
 
@@ -147,7 +180,9 @@ struct TlsConn {
         return {};
     }
 
-    // Read all response bytes until server closes connection.
+    // Read all response bytes until the server closes the connection. We
+    // send Connection: close so the server is expected to FIN after the
+    // body — recv-until-EOF is the correct termination signal here.
     Result<std::vector<std::byte>> recv_all() {
         using Bytes = std::vector<std::byte>;
         Bytes buf;
@@ -156,10 +191,18 @@ struct TlsConn {
             if (tls) {
                 size_t n = 0;
                 OSStatus err = SSLRead(ctx, chunk.data(), chunk.size(), &n);
-                if (err == errSSLClosedGraceful || err == errSSLClosedAbort || n == 0) break;
+                // Only break on actual end-of-stream. SSLRead can return
+                // noErr or errSSLWouldBlock with n=0 mid-stream (between
+                // TLS records, during renegotiation, etc.) — those are
+                // retry conditions, not EOF. Breaking on plain n==0 made
+                // recv_all stop early when GitHub's CDN paced the body
+                // across multiple TLS records: we'd see only the headers
+                // and report a 0-byte download.
+                if (err == errSSLClosedGraceful || err == errSSLClosedAbort) break;
                 if (err != noErr && err != errSSLWouldBlock)
                     return make_error<Bytes>("SSLRead: " + std::to_string(err));
-                if (n > 0) buf.insert(buf.end(), chunk.begin(), chunk.begin() + static_cast<ptrdiff_t>(n));
+                if (n > 0)
+                    buf.insert(buf.end(), chunk.begin(), chunk.begin() + static_cast<ptrdiff_t>(n));
             } else {
                 ssize_t n = ::recv(fd, chunk.data(), chunk.size(), 0);
                 if (n <= 0) break;
@@ -226,12 +269,14 @@ static Result<Response> do_request(const HttpRequest& req, int max_redirects = 5
 }
 
 static Result<Response> do_request_with_retry(HttpRequest req, const RequestOptions& opts) {
+    std::string last_err;
     for (int attempt = 0; attempt <= opts.max_retries; ++attempt) {
         auto r = do_request(req);
         if (r) return r;
+        last_err = r.error().message;
         if (attempt < opts.max_retries) backoff_sleep(attempt);
     }
-    return make_error<Response>("http: all retries exhausted");
+    return make_error<Response>("http: all retries exhausted (last: " + last_err + ")");
 }
 
 // ─── HttpClient::Impl ─────────────────────────────────────────────────────────
