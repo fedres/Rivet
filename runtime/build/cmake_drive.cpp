@@ -6,6 +6,7 @@
 
 #include <format>
 #include <iostream>
+#include <unordered_set>
 
 namespace rivet::build {
 
@@ -77,6 +78,25 @@ std::string make_toolchain_text(const toolchain::ToolchainInfo& tc,
             "list(PREPEND CMAKE_PREFIX_PATH \"{}\")\n", path(extra_prefix));
     }
 
+    // find_package interception. Every find_package() call the user's
+    // CMakeLists makes is logged to <build_dir>/rivet-find-package.log.
+    // After configure, rivet reads it and surfaces a list of packages
+    // the project asked for — useful both for diagnosing "what do I need
+    // to `rivet add`?" and for the (future) `rivet add --from-find-package`
+    // bulk-import flow.
+    //
+    // The macro-override pattern is documented in CMake: defining a macro
+    // with the same name as a built-in command makes CMake auto-provide
+    // `_<name>` as the underlying call. We log, then delegate. Failures
+    // (`REQUIRED` packages not found) propagate normally through the
+    // inner call — the log entry exists regardless of outcome.
+    text +=
+        "macro(find_package _rivet_pkg)\n"
+        "    file(APPEND \"${CMAKE_BINARY_DIR}/rivet-find-package.log\"\n"
+        "         \"${_rivet_pkg}\\n\")\n"
+        "    _find_package(${ARGV})\n"
+        "endmacro()\n";
+
     return text;
 }
 
@@ -139,6 +159,32 @@ Result<void> build_via_cmake(const CmakeDriveOptions& opts,
     build.capture_stderr = false;
     if (int rc = spawn_and_wait(std::move(build), "cmake build"); rc != 0)
         return make_error("cmake build failed (exit " + std::to_string(rc) + ")");
+
+    // Surface find_package() hits the user's CMakeLists requested.
+    // Helps the "I cloned a cmake project — what do I need to rivet add?"
+    // question without forcing the user to grep cmake's stderr.
+    Path fp_log = build_dir / "rivet-find-package.log";
+    if (auto bytes = rivet::fs::read_file(fp_log)) {
+        std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+        std::unordered_set<std::string> seen;
+        std::vector<std::string> uniq;
+        size_t pos = 0;
+        while (pos < text.size()) {
+            size_t nl = text.find('\n', pos);
+            std::string line(text.substr(pos, (nl == std::string_view::npos ? text.size() : nl) - pos));
+            // Strip CR (Windows) + whitespace.
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
+                line.pop_back();
+            if (!line.empty() && seen.insert(line).second) uniq.push_back(line);
+            if (nl == std::string_view::npos) break;
+            pos = nl + 1;
+        }
+        if (!uniq.empty()) {
+            std::cout << "\n  find_package() requests this project made:\n";
+            for (const auto& p : uniq)
+                std::cout << "    - " << p << "  (try: rivet add " << p << ")\n";
+        }
+    }
 
     std::cout << "\n  Build dir: " << build_dir.string() << "\n";
     return {};
