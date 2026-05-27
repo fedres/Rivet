@@ -124,6 +124,72 @@ jobs:
           & $Bin --version
           if ($LASTEXITCODE -ne 0) { throw "self-built rivet --version exited $LASTEXITCODE" }
 
+      # ── M2 acceptance: rivet drives an external CMake project ──────────
+      # Scaffold a minimal cmake project (no rivet.toml), run `rivet build`
+      # in its directory, expect the cmake-driving path to compile + link
+      # the binary using the bundled clang + ninja.
+      - name: M2 cmake-drive (rivet builds a cmake project, Unix)
+        if: runner.os != 'Windows'
+        continue-on-error: ${{ matrix.allow_failure }}
+        env:
+          RIVET_HOME: ${{ runner.temp }}/rivet-cmake-home
+        run: |
+          set -eux
+          mkdir -p "$RIVET_HOME"
+          ./build/release/rivet toolchain install 19.1.7
+          DEMO="$(mktemp -d)/cmake-demo"
+          mkdir -p "$DEMO"
+          cat > "$DEMO/CMakeLists.txt" <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(cmake_demo LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 17)
+          add_executable(cmake_demo main.cpp)
+          CMAKE
+          cat > "$DEMO/main.cpp" <<'CPP'
+          #include <iostream>
+          int main() { std::cout << "hello from cmake-driven rivet\n"; return 0; }
+          CPP
+          cd "$DEMO"
+          ../../*/release/rivet build || true   # noop fallback; next line is the real call
+          "$GITHUB_WORKSPACE/build/release/rivet" build
+          # Locate the binary (cmake's exe name = target name).
+          BIN="$(find .rivet/cmake -maxdepth 4 -type f -name cmake_demo | head -1)"
+          test -n "$BIN" || { echo "binary not produced"; ls -la .rivet/cmake; exit 1; }
+          OUT="$($BIN)"
+          test "$OUT" = "hello from cmake-driven rivet"
+
+      - name: M2 cmake-drive (rivet builds a cmake project, Windows)
+        if: runner.os == 'Windows'
+        continue-on-error: ${{ matrix.allow_failure }}
+        env:
+          RIVET_HOME: ${{ runner.temp }}\rivet-cmake-home
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:RIVET_HOME | Out-Null
+          .\build\release\rivet.exe toolchain install 19.1.7
+          if ($LASTEXITCODE -ne 0) { throw "toolchain install failed" }
+          $Demo = Join-Path $env:RUNNER_TEMP "cmake-demo-$([Guid]::NewGuid().ToString('N').Substring(0,6))"
+          New-Item -ItemType Directory -Force -Path $Demo | Out-Null
+          Set-Content -Path (Join-Path $Demo "CMakeLists.txt") -Value @"
+          cmake_minimum_required(VERSION 3.20)
+          project(cmake_demo LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 17)
+          add_executable(cmake_demo main.cpp)
+          "@
+          Set-Content -Path (Join-Path $Demo "main.cpp") -Value @"
+          #include <iostream>
+          int main() { std::cout << ""hello from cmake-driven rivet\n""; return 0; }
+          "@
+          Push-Location $Demo
+          $RivetExe = Join-Path $env:GITHUB_WORKSPACE 'build\release\rivet.exe'
+          & $RivetExe build
+          if ($LASTEXITCODE -ne 0) { throw "rivet build (cmake-drive) failed" }
+          $Bin = Get-ChildItem -Recurse -Filter cmake_demo.exe -Path .rivet\cmake | Select-Object -First 1
+          if (-not $Bin) { throw "cmake_demo.exe not produced" }
+          $out = & $Bin.FullName
+          if ($out -notmatch 'hello from cmake-driven rivet') { throw "unexpected output: $out" }
+          Pop-Location
+
       # ── Upload logs on failure ─────────────────────────────────────────
       - name: Upload artifacts on failure
         if: failure()
