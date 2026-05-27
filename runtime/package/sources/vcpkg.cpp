@@ -158,6 +158,18 @@ Result<Path> write_overlay_triplet(const Path& vcpkg_root,
         "    if(_rivet_sdk_rc EQUAL 0 AND EXISTS \"${{_rivet_sdk_path}}\")\n"
         "        set(CMAKE_OSX_SYSROOT \"${{_rivet_sdk_path}}\" CACHE PATH \"\")\n"
         "    endif()\n"
+        "endif()\n"
+        // Force the bundled lld on Apple. The bundled clang sets up DYLD
+        // search paths that include the toolchain's lib/ — when clang then
+        // invokes Apple's /usr/bin/ld, dyld loads rivet's libc++ for it
+        // instead of Apple's, and Apple's ld immediately crashes with
+        // "Symbol not found: __ZdaPv" (operator delete[]). Bundled lld
+        // (ld64.lld) is linked against the same libc++ rivet ships, so the
+        // mismatch doesn't happen. Verified by the macOS smoke test logs.
+        "if(APPLE)\n"
+        "    foreach(_v EXE SHARED MODULE)\n"
+        "        set(CMAKE_${{_v}}_LINKER_FLAGS_INIT \"-fuse-ld=lld\")\n"
+        "    endforeach()\n"
         "endif()\n",
         cc_path, cxx_path, ar_path, ranlib_path, ld_path);
     if (auto r = write_text(chainload, chainload_text); !r)
