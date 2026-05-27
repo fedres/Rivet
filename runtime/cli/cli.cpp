@@ -257,6 +257,61 @@ int cmd_build(const Context& ctx) {
     }
     const auto& manifest = *manifest_r;
 
+    // ── Workspace dispatch (C3 phase B) ──────────────────────────────
+    // If this manifest declares [workspace] and ISN'T also a package
+    // (i.e. has no [package] block), recurse into each member by
+    // re-invoking ourselves with cwd=<member-dir>. Forward the --profile
+    // flag through.
+    //
+    // Workspace + package hybrid (the manifest has both) is treated as
+    // a regular package build for now — the workspace is only acted
+    // on when the manifest is a *pure* workspace root. Mirrors cargo's
+    // "virtual workspace" concept.
+    if (manifest.workspace.has_value() && manifest.name.empty()) {
+        const auto& ws = *manifest.workspace;
+        if (ws.members.empty()) {
+            std::cerr << "error: [workspace] has no members.\n";
+            return 1;
+        }
+        auto self = rivet::process::self_exe();
+        if (!self) {
+            std::cerr << "error: cannot resolve rivet binary path: "
+                      << self.error().message << "\n";
+            return 1;
+        }
+        std::string profile{flag_value(args, "--profile").value_or("debug")};
+        int failed = 0;
+        for (const auto& m : ws.members) {
+            Path member_dir = manifest.root_dir / m;
+            if (!rivet::fs::exists(member_dir / "rivet.toml").value_or(false)) {
+                std::cerr << "warning: workspace member '" << m
+                          << "' has no rivet.toml — skipping\n";
+                continue;
+            }
+            std::cout << "\n══ building workspace member: " << m << " ══\n";
+            rivet::process::SpawnOptions opts;
+            opts.args        = {self->string(), "build", "--profile=" + profile};
+            opts.working_dir = member_dir;
+            opts.inherit_env = true;
+            auto child = rivet::process::spawn(std::move(opts));
+            if (!child) {
+                std::cerr << "error: cannot spawn child rivet for '"
+                          << m << "': " << child.error().message << "\n";
+                ++failed;
+                continue;
+            }
+            auto code = child->wait();
+            if (!code || *code != 0) {
+                std::cerr << "error: workspace member '" << m
+                          << "' failed (exit " << code.value_or(-1) << ")\n";
+                ++failed;
+            }
+        }
+        std::cout << "\n══ workspace build: " << ws.members.size() - failed
+                  << " ok, " << failed << " failed ══\n";
+        return failed == 0 ? 0 : 1;
+    }
+
     if (auto vr = rivet::pkg::validate(manifest); !vr) {
         std::cerr << "error: " << vr.error().message << "\n";
         return 1;

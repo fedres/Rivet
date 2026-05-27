@@ -254,7 +254,54 @@ def main() -> None:
         if "no binary named" not in proc.stderr:
             sys.exit(f"unexpected error message: {proc.stderr!r}")
 
-        banner("SMOKE TEST PASSED (hello-fmt + M1 multi-target + exec sanity)")
+        # ── C3: workspace (root with [workspace] + members) ──────────────
+        # Scaffold a tiny monorepo: one workspace root listing two member
+        # packages. `rivet build` at the root must dispatch into each
+        # member, builds them via the existing single-binary path, and
+        # produce two binaries. Validates workspace recursion + member
+        # manifest parsing.
+        banner("step 11: workspace build (C3 root + 2 members)")
+        ws = workdir / "ws-demo"
+        (ws / "crates" / "alpha" / "src").mkdir(parents=True)
+        (ws / "crates" / "beta"  / "src").mkdir(parents=True)
+        (ws / "rivet.toml").write_text(
+            "[workspace]\n"
+            "members = [\"crates/alpha\", \"crates/beta\"]\n"
+        )
+        (ws / "crates" / "alpha" / "rivet.toml").write_text(
+            "[package]\n"
+            "name = \"alpha\"\n"
+            "version = \"0.1.0\"\n"
+        )
+        (ws / "crates" / "alpha" / "src" / "main.cpp").write_text(
+            "#include <iostream>\n"
+            "int main() { std::cout << \"alpha\\n\"; return 0; }\n"
+        )
+        (ws / "crates" / "beta" / "rivet.toml").write_text(
+            "[package]\n"
+            "name = \"beta\"\n"
+            "version = \"0.1.0\"\n"
+        )
+        (ws / "crates" / "beta" / "src" / "main.cpp").write_text(
+            "#include <iostream>\n"
+            "int main() { std::cout << \"beta\\n\"; return 0; }\n"
+        )
+        run([str(rivet_bin), "build"], cwd=ws, env=env, timeout=300)
+
+        for name in ("alpha", "beta"):
+            bin_path = ws / "crates" / name / ".rivet" / "build" / "debug" / "bin" / name
+            if not bin_path.exists():
+                # Tolerate .exe suffix on Windows.
+                alt = bin_path.with_suffix(".exe")
+                if alt.exists():
+                    bin_path = alt
+            if not bin_path.exists():
+                sys.exit(f"workspace member '{name}' did not produce a binary at {bin_path}")
+            proc = subprocess.run([str(bin_path)], capture_output=True, text=True, timeout=30, env=env)
+            if proc.returncode != 0 or name not in proc.stdout:
+                sys.exit(f"workspace member '{name}' bad: rc={proc.returncode} stdout={proc.stdout!r}")
+
+        banner("SMOKE TEST PASSED (hello-fmt + M1 multi-target + exec sanity + C3 workspace)")
     except BaseException:
         failed = True
         raise
