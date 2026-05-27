@@ -270,6 +270,31 @@ link_libs = ["ws2_32.lib"]
     EXPECT_EQ(t.cfg_overrides[2].cfg.os, "windows");
 }
 
+TEST_F(ManifestTest, ParsesWorkspaceSection) {
+    auto path = write_toml(R"(
+[workspace]
+members = ["crates/foo", "crates/bar"]
+exclude = ["crates/wip-baz"]
+
+[workspace.dependencies]
+fmt = "10.2"
+spdlog = { version = "1.13", static = true }
+)");
+    auto r = parse_manifest(path);
+    ASSERT_TRUE(r.has_value()) << r.error().message;
+    ASSERT_TRUE(r->workspace.has_value());
+    const auto& w = *r->workspace;
+    ASSERT_EQ(w.members.size(), 2u);
+    EXPECT_EQ(w.members[0], "crates/foo");
+    EXPECT_EQ(w.members[1], "crates/bar");
+    ASSERT_EQ(w.exclude.size(), 1u);
+    EXPECT_EQ(w.exclude[0], "crates/wip-baz");
+    ASSERT_EQ(w.dependencies.size(), 2u);
+    EXPECT_EQ(w.dependencies.at("fmt").version, "10.2");
+    EXPECT_EQ(w.dependencies.at("spdlog").version, "1.13");
+    EXPECT_TRUE(w.dependencies.at("spdlog").static_link);
+}
+
 TEST_F(ManifestTest, ParsesPerSourceCompileFlags) {
     auto path = write_toml(R"(
 [package]

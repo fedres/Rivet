@@ -189,6 +189,22 @@ Result<Manifest> parse_manifest(const Path& path) {
     parse_deps(tbl.get_as<toml::table>("dependencies"),     m.dependencies);
     parse_deps(tbl.get_as<toml::table>("dev-dependencies"), m.dev_dependencies);
 
+    // [workspace] — optional. Cargo-style monorepo declaration.
+    if (auto* ws = tbl.get_as<toml::table>("workspace")) {
+        WorkspaceSection w;
+        if (auto* a = ws->get_as<toml::array>("members")) {
+            for (const auto& v : *a)
+                if (auto s = v.value<std::string>()) w.members.push_back(*s);
+        }
+        if (auto* a = ws->get_as<toml::array>("exclude")) {
+            for (const auto& v : *a)
+                if (auto s = v.value<std::string>()) w.exclude.push_back(*s);
+        }
+        // [workspace.dependencies] uses the same shape as [dependencies].
+        parse_deps(ws->get_as<toml::table>("dependencies"), w.dependencies);
+        m.workspace = std::move(w);
+    }
+
     if (auto* scripts = tbl.get_as<toml::table>("scripts")) {
         for (const auto& [k, v] : *scripts)
             if (auto s = v.value<std::string>())

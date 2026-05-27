@@ -112,6 +112,24 @@ struct Target {
     std::vector<TargetCfgOverride>      cfg_overrides;
 };
 
+// ─── Workspace (cargo-style monorepo support) ────────────────────────────────
+//
+// A workspace root has a `[workspace]` block in its rivet.toml. The `members`
+// list points at sub-directories — each containing its own rivet.toml with a
+// `[package]` block. `rivet build` at the workspace root builds every member
+// in dependency order; `rivet build` inside a member builds that member and
+// any workspace-member deps it pulls in.
+//
+// Workspace-level pins (`[workspace.dependencies]`) let every member share a
+// single source of truth for external versions via `fmt.workspace = true` in
+// the member's [dependencies].
+
+struct WorkspaceSection {
+    std::vector<std::string> members;            // relative dirs containing member rivet.toml
+    std::vector<std::string> exclude;            // members glob-excluded from the build
+    std::unordered_map<std::string, DepSpec> dependencies;  // shared pins
+};
+
 // ─── Package manifest (top-level rivet.toml) ─────────────────────────────────
 
 struct Manifest {
@@ -150,6 +168,12 @@ struct Manifest {
     // [[lib]], [[bin]], [[test]], [[vendor]] arrays. Empty when the
     // manifest is a single-binary project that relies on src/-scanning.
     std::vector<Target> targets;
+
+    // [workspace] — optional. When present this manifest is a workspace
+    // root; members[] points at sub-dirs that each contain their own
+    // rivet.toml. The root may itself also be a package (have a
+    // [package] block) or just be a workspace container.
+    std::optional<WorkspaceSection> workspace;
 
     // Absolute path to the directory containing this rivet.toml.
     Path root_dir;
