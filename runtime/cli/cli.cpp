@@ -182,8 +182,12 @@ static void collect_sources(const Path& dir, std::vector<Path>& out) {
 
 int cmd_build(const Context& ctx) {
     auto args    = ctx.args_after_subcommand();
-    auto cwd_opt = rivet::env::get("PWD");
-    Path cwd     = cwd_opt ? Path{*cwd_opt} : Path{"."};
+    // Use the actual OS-level cwd, not $PWD: tools that invoke rivet via
+    // fork+exec (Python subprocess, build scripts, etc.) update the process
+    // cwd via chdir() but leave $PWD pointing at the parent's cwd. Reading
+    // $PWD here makes rivet walk up from the wrong directory and find an
+    // unrelated rivet.toml on the way to the filesystem root.
+    Path cwd = std::filesystem::current_path();
 
     // 1. Find and parse the manifest.
     auto manifest_r = rivet::pkg::find_and_parse(cwd);
