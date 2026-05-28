@@ -909,117 +909,227 @@ int cmd_check(const Context& ctx) {
 }
 
 // ─── cmd_test ────────────────────────────────────────────────────────────────
+//
+// `rivet test` — build every test target, run each as its own process,
+// aggregate pass/fail. Mirrors cargo:
+//
+//   - Each [[test]] in the manifest becomes one test binary.
+//   - If the manifest has zero [[test]] declarations, auto-discover any
+//     `tests/*.cpp` under the package root and synthesise one [[test]]
+//     per file (cargo-style integration tests).
+//   - Auto-link every synthesised test against the manifest's [[lib]]s,
+//     so user code in src/ is reachable from tests/ without manual
+//     depends_on.
+//
+// Filter: a positional arg or `--filter <s>` restricts the set to
+// targets whose name contains <s>. Exit code: zero iff every test
+// binary returned zero. Workspace dispatch recurses to members like
+// the rest of the build pipeline.
 
 int cmd_test(const Context& ctx) {
-    // Build first (reuse cmd_build).
-    int build_rc = cmd_build(ctx);
-    if (build_rc != 0) return build_rc;
+    auto args = ctx.args_after_subcommand();
+    Path cwd  = std::filesystem::current_path();
 
-    // Use the actual OS-level cwd, not $PWD: tools that invoke rivet via
-    // fork+exec (Python subprocess, build scripts, etc.) update the process
-    // cwd via chdir() but leave $PWD pointing at the parent's cwd. Reading
-    // $PWD here makes rivet walk up from the wrong directory and find an
-    // unrelated rivet.toml on the way to the filesystem root.
-    Path cwd = std::filesystem::current_path();
     auto manifest_r = rivet::pkg::find_and_parse(cwd);
-    if (!manifest_r) return 1;
-    const auto& manifest = *manifest_r;
+    if (!manifest_r) {
+        std::cerr << "error: " << manifest_r.error().message << "\n";
+        return 1;
+    }
+    rivet::pkg::Manifest manifest = *manifest_r;
 
-    auto args       = ctx.args_after_subcommand();
-    auto profile    = std::string{flag_value(args, "--profile").value_or("debug")};
-    auto tests_dir  = manifest.root_dir / "tests";
+    // ── Workspace dispatch ──────────────────────────────────────────
+    if (manifest.workspace.has_value() && manifest.name.empty()) {
+        const auto& ws = *manifest.workspace;
+        if (ws.members.empty()) {
+            std::cerr << "error: [workspace] has no members.\n";
+            return 1;
+        }
+        auto self = rivet::process::self_exe();
+        if (!self) {
+            std::cerr << "error: cannot resolve rivet binary: "
+                      << self.error().message << "\n";
+            return 1;
+        }
+        std::string fwd_profile{flag_value(args, "--profile").value_or("debug")};
+        std::string fwd_filter{flag_value(args, "--filter").value_or("")};
+        int total = 0, failed = 0;
+        for (const auto& m : ws.members) {
+            Path member_dir = manifest.root_dir / m;
+            if (!rivet::fs::exists(member_dir / "rivet.toml").value_or(false))
+                continue;
+            std::cout << "\n══ testing workspace member: " << m << " ══\n";
+            rivet::process::SpawnOptions opts;
+            opts.args = {self->string(), "test", "--profile=" + fwd_profile};
+            if (!fwd_filter.empty()) opts.args.push_back("--filter=" + fwd_filter);
+            opts.working_dir = member_dir;
+            opts.inherit_env = true;
+            ++total;
+            auto child = rivet::process::spawn(std::move(opts));
+            if (!child) { ++failed; continue; }
+            auto code = child->wait();
+            if (!code || *code != 0) ++failed;
+        }
+        std::cout << std::format(
+            "\n══ workspace test: {} member(s), {} failed ══\n",
+            total, failed);
+        return failed == 0 ? 0 : 1;
+    }
 
-    if (!rivet::fs::exists(tests_dir).value_or(false)) {
-        std::cout << "warning: no tests/ directory found.\n";
+    if (auto vr = rivet::pkg::validate(manifest); !vr) {
+        std::cerr << "error: " << vr.error().message << "\n";
+        return 1;
+    }
+
+    // ── Test target collection ──────────────────────────────────────
+    // First pass: count any [[test]] already declared in the manifest.
+    bool has_manifest_tests = false;
+    std::vector<std::string> lib_names;
+    for (const auto& t : manifest.targets) {
+        if (t.kind == rivet::pkg::TargetKind::Test) has_manifest_tests = true;
+        if (t.kind == rivet::pkg::TargetKind::Lib)  lib_names.push_back(t.name);
+    }
+
+    // Second pass: auto-discover tests/*.cpp if the manifest doesn't
+    // already enumerate tests. Each file becomes one [[test]] target,
+    // auto-linked against every declared [[lib]] so user-defined library
+    // code is reachable.
+    if (!has_manifest_tests) {
+        Path tests_dir = manifest.root_dir / "tests";
+        if (rivet::fs::exists(tests_dir).value_or(false)) {
+            std::vector<Path> test_files;
+            collect_sources(tests_dir, test_files);
+            for (const auto& src : test_files) {
+                rivet::pkg::Target t;
+                t.kind = rivet::pkg::TargetKind::Test;
+                t.name = src.stem().string();  // tests/foo.cpp → "foo"
+                t.path = src.lexically_relative(manifest.root_dir).string();
+                t.depends_on = lib_names;       // auto-link to all [[lib]]s
+                manifest.targets.push_back(std::move(t));
+            }
+        }
+    }
+
+    // Collect the indices of test targets we'll actually run.
+    auto filter_arg = flag_value(args, "--filter");
+    std::string filter = filter_arg.has_value() ? std::string(*filter_arg) : "";
+    if (filter.empty() && !args.empty() && args[0].substr(0, 2) != "--")
+        filter = std::string(args[0]);
+
+    std::vector<size_t> selected;
+    for (size_t i = 0; i < manifest.targets.size(); ++i) {
+        const auto& t = manifest.targets[i];
+        if (t.kind != rivet::pkg::TargetKind::Test) continue;
+        if (!filter.empty() && t.name.find(filter) == std::string::npos) continue;
+        selected.push_back(i);
+    }
+
+    if (selected.empty()) {
+        if (!filter.empty()) {
+            std::cout << "no test targets matched '" << filter << "'\n";
+        } else {
+            std::cout << "warning: no test targets found.\n"
+                      << "hint: add [[test]] to rivet.toml or drop a .cpp file in tests/.\n";
+        }
         return 0;
     }
 
-    // Collect test source files.
-    std::vector<Path> test_sources;
-    collect_sources(tests_dir, test_sources);
-    if (test_sources.empty()) {
-        std::cout << "warning: no test source files found.\n";
-        return 0;
-    }
+    // ── Build configuration ─────────────────────────────────────────
+    auto profile = std::string{flag_value(args, "--profile").value_or("debug")};
+    bool is_release = (profile == "release");
 
-    // Find the active toolchain.
     auto rivet_home_r = rivet::env::rivet_home();
-    if (!rivet_home_r) return 1;
+    if (!rivet_home_r) {
+        std::cerr << "error: cannot determine rivet home: "
+                  << rivet_home_r.error().message << "\n";
+        return 1;
+    }
     auto tc_r = rivet::toolchain::find_active(*rivet_home_r);
     if (!tc_r) {
-        std::cerr << "error: no toolchain: " << tc_r.error().message << "\n";
+        std::cerr << "error: no toolchain available: " << tc_r.error().message << "\n"
+                  << "hint: run 'rivet toolchain install <version>' first.\n";
+        return 1;
+    }
+    if (const auto& sdk = rivet::toolchain::detect_host_sdk(); !sdk.present) {
+        std::cerr << "error: platform SDK not detected.\n\n" << sdk.hint << "\n";
         return 1;
     }
 
     rivet::build::BuildConfig cfg;
     cfg.cxx_std = manifest.build.cxx_std;
-    cfg.opt     = rivet::build::OptLevel::Debug;
-    cfg.debug   = true;
+    cfg.opt     = is_release ? rivet::build::OptLevel::O2 : rivet::build::OptLevel::Debug;
+    cfg.debug   = !is_release;
 
+    // ── Build via multi_target (includes libs + bins + tests) ────────
     rivet::build::BuildGraph graph;
-    std::vector<rivet::build::TaskId> obj_ids;
-    std::vector<Path> obj_paths;
-    auto obj_dir = manifest.root_dir / ".rivet" / "build" / profile / "test_obj";
-
-    for (const auto& src : test_sources) {
-        auto rel      = src.lexically_relative(manifest.root_dir);
-        auto out_path = obj_dir / (rel.string() + ".o");
-        auto cj       = rivet::toolchain::compile_job_from(src, out_path, cfg, *tc_r);
-        if (auto cmd_r = rivet::toolchain::make_compile_command(cj, *tc_r)) {
-            rivet::build::TaskNode node;
-            node.name    = src.filename().string();
-            node.kind    = rivet::build::TaskKind::Compile;
-            node.inputs  = {{ src, "" }};
-            node.outputs = {{ out_path, true }};
-            node.command = std::move(*cmd_r);
-            auto id = graph.add(std::move(node));
-            obj_ids.push_back(id);
-            obj_paths.push_back(out_path);
-        }
-    }
-
-    auto test_bin = manifest.root_dir / ".rivet" / "build" / profile / "bin"
-                  / (manifest.name + "-test");
-    rivet::toolchain::LinkJob lj;
-    lj.inputs  = obj_paths;
-    lj.output  = test_bin;
-
-    if (auto link_r = rivet::toolchain::make_link_command(lj, *tc_r)) {
-        rivet::build::TaskNode link_node;
-        link_node.name    = manifest.name + "-test [link]";
-        link_node.kind    = rivet::build::TaskKind::Link;
-        link_node.deps    = obj_ids;
-        for (const auto& o : obj_paths) link_node.inputs.push_back({ o, "" });
-        link_node.outputs = {{ test_bin, true }};
-        link_node.command = std::move(*link_r);
-        graph.add(std::move(link_node));
+    rivet::build::InstalledExternalDeps no_deps;
+    auto art_r = rivet::build::build_targets(
+        manifest, *tc_r, cfg, no_deps, profile, graph, nullptr);
+    if (!art_r) {
+        std::cerr << "error: " << art_r.error().message << "\n";
+        return 1;
     }
 
     rivet::build::Executor executor{graph, std::thread::hardware_concurrency()};
     auto summary = executor.run();
     if (summary.failed) {
-        std::cerr << "error: test build failed.\n";
+        std::cerr << std::format(
+            "error: test build failed ({} task(s) failed)\n", summary.failed);
         return 1;
     }
 
-    // Run the test binary.
-    std::cout << std::format("Running tests: {}\n", test_bin.string());
-    rivet::process::SpawnOptions run_opts;
-    run_opts.args        = {test_bin.string()};
-    run_opts.inherit_env = true;
+    // ── Run each test binary, aggregate ──────────────────────────────
+    std::cout << "\nRunning tests\n";
+    int passed = 0, failed = 0;
+    auto t_start = rivet::time::now();
+    for (size_t idx : selected) {
+        const auto& t = manifest.targets[idx];
+        const rivet::build::TargetArtifact* art = nullptr;
+        for (const auto& a : *art_r) {
+            if (a.name == t.name && a.kind == rivet::pkg::TargetKind::Test) {
+                art = &a;
+                break;
+            }
+        }
+        if (!art) {
+            std::cerr << std::format("  [SKIP] {} (no artifact)\n", t.name);
+            ++failed;
+            continue;
+        }
 
-    auto child_r = rivet::process::spawn(std::move(run_opts));
-    if (!child_r) {
-        std::cerr << "error: could not run tests: " << child_r.error().message << "\n";
-        return 1;
+        rivet::process::SpawnOptions opts;
+        opts.args        = {art->artifact_path.string()};
+        opts.inherit_env = true;
+        opts.working_dir = manifest.root_dir;
+
+        auto t0 = rivet::time::now();
+        auto child = rivet::process::spawn(std::move(opts));
+        if (!child) {
+            std::cerr << std::format("  [FAIL] {}  (spawn: {})\n",
+                t.name, child.error().message);
+            ++failed;
+            continue;
+        }
+        auto code = child->wait();
+        auto dt = rivet::time::now() - t0;
+        double ms = std::chrono::duration<double, std::milli>(dt).count();
+        int rc = code.value_or(-1);
+        if (rc == 0) {
+            std::cout << std::format("  \033[32m[ OK ]\033[0m {}  ({:.0f} ms)\n",
+                t.name, ms);
+            ++passed;
+        } else {
+            std::cerr << std::format("  \033[31m[FAIL]\033[0m {}  (exit {}, {:.0f} ms)\n",
+                t.name, rc, ms);
+            ++failed;
+        }
     }
-    auto wait_r = child_r->wait();
-    int rc      = wait_r.value_or(1);
-    if (rc == 0)
-        std::cout << "  All tests passed.\n";
-    else
-        std::cerr << std::format("  Tests failed (exit {}).\n", rc);
-    return rc;
+
+    auto elapsed = rivet::time::now() - t_start;
+    double total_ms = std::chrono::duration<double, std::milli>(elapsed).count();
+    std::cout << std::format(
+        "\n  {} ran, {} passed, {} failed  [{:.1f}s]\n",
+        passed + failed, passed, failed, total_ms / 1000.0);
+    return failed == 0 ? 0 : 1;
 }
 
 // ─── cmd_run ─────────────────────────────────────────────────────────────────
