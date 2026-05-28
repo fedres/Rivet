@@ -71,7 +71,11 @@ jobs:
         run: |
           $psExe = "${{ matrix.psh }}"
           Write-Host "Spawning $psExe to host install.ps1"
-          & $psExe -NoProfile -ExecutionPolicy Bypass -Command "& { `$ErrorActionPreference='Stop'; Write-Host (`"PSVersion: `$(`$PSVersionTable.PSVersion)`"); . .\bootstrap\install.ps1 }"
+          # Run the .ps1 file directly with -File; avoids PS 5.1/PS 7 quoting
+          # discrepancies in a -Command string. Print the PS version inside
+          # bootstrap/install.ps1 itself would be cleaner, but logging here
+          # works without touching the user-facing script.
+          & $psExe -NoProfile -ExecutionPolicy Bypass -File .\bootstrap\install.ps1
           if ($LASTEXITCODE -ne 0) { throw "install.ps1 exited $LASTEXITCODE" }
 
       - name: Verify rivet --version
@@ -100,7 +104,19 @@ jobs:
           $sha   = "${{ github.sha }}"
           $url   = "https://raw.githubusercontent.com/${{ github.repository }}/$sha/bootstrap/install.ps1"
           Write-Host "Fetching $url via $psExe"
-          & $psExe -NoProfile -ExecutionPolicy Bypass -Command "& { `$ErrorActionPreference='Stop'; `$script = Invoke-RestMethod -Uri '$url' -UseBasicParsing; Invoke-Expression `$script }"
+          # Stage the iex pattern in a wrapper .ps1 we tell the matrix shell
+          # to execute with -File. Keeps backtick-escape semantics out of
+          # the picture entirely (PS 5.1 and PS 7 tokenise -Command strings
+          # differently).
+          $wrapper = New-TemporaryFile
+          Rename-Item $wrapper -NewName ($wrapper.Name + ".ps1")
+          $wrapper = "$wrapper.ps1"
+          @"
+          `$ErrorActionPreference = 'Stop'
+          `$script = Invoke-RestMethod -Uri '$url' -UseBasicParsing
+          Invoke-Expression `$script
+          "@ | Set-Content -Path $wrapper
+          & $psExe -NoProfile -ExecutionPolicy Bypass -File $wrapper
           if ($LASTEXITCODE -ne 0) { throw "irm | iex pipeline exited $LASTEXITCODE" }
           $exe = Join-Path $env:RIVET_HOME "bin\rivet.exe"
           if (-not (Test-Path $exe)) { throw "rivet.exe not at $exe (irm/iex path)" }
