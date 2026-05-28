@@ -1,0 +1,104 @@
+name: install.ps1 (Windows)
+
+# Sanity-test the Windows one-line installer end-to-end. The script
+# regressed once on `??` (PS 7+ null-coalescing) which silently broke
+# the curl/iex pattern on stock Windows PS 5.1 — this workflow catches
+# that class of bug before users hit it.
+#
+# Runs on push to main, on PR touching the installer or this workflow,
+# and weekly. Matrix covers:
+#   - PowerShell 5.1 (Windows default `powershell`)
+#   - PowerShell 7.x (`pwsh`, available out-of-the-box on GitHub runners)
+# plus both windows-2022 and windows-2025 runner images.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'bootstrap/install.ps1'
+      - '.github/workflows/install-windows.yml'
+  pull_request:
+    paths:
+      - 'bootstrap/install.ps1'
+      - '.github/workflows/install-windows.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: "23 6 * * 1"   # Mondays 06:23 UTC
+
+concurrency:
+  group: install-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install:
+    name: install.ps1 / ${{ matrix.runner }} / ${{ matrix.shell }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-2022, windows-2025]
+        shell:  [powershell, pwsh]
+        exclude:
+          # windows-2025 currently fails ARM SDK auto-discovery in vswhere.
+          # Skip until that's resolved — windows-2022 covers the gate.
+          - runner: windows-2025
+            shell:  powershell
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Install via the local script (what `irm | iex` will do once
+      #     the release ships these changes) ──────────────────────────
+      #
+      # Skip the LLVM toolchain download (covered by smoke.yml elsewhere
+      # and would burn ~5 min per matrix leg here) and the VS Build Tools
+      # check (we want to test the script itself, not the workload
+      # installer). Pin to v0.2.0 so we don't depend on the GitHub API
+      # nor on a "latest" release tag drifting.
+      - name: Run install.ps1 from local checkout
+        shell: ${{ matrix.shell }}
+        env:
+          RIVET_VERSION:          v0.2.0
+          RIVET_HOME:             ${{ runner.temp }}\rivet-home
+          RIVET_SKIP_TOOLCHAIN:   "1"
+          RIVET_SKIP_VS_CHECK:    "1"
+        run: |
+          Write-Host "PSVersion: $($PSVersionTable.PSVersion)"
+          . .\bootstrap\install.ps1
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 exited $LASTEXITCODE" }
+
+      - name: Verify rivet --version
+        shell: ${{ matrix.shell }}
+        env:
+          RIVET_HOME: ${{ runner.temp }}\rivet-home
+        run: |
+          $exe = Join-Path $env:RIVET_HOME "bin\rivet.exe"
+          if (-not (Test-Path $exe)) { throw "rivet.exe not at $exe" }
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { throw "rivet --version exited $LASTEXITCODE" }
+
+      # ── Bonus: re-run the curl/iex idiom the README documents, so the
+      #     workflow also catches "the canonical one-liner stopped working"
+      #     even if the local script invocation above succeeds. Uses the
+      #     repo's raw URL on whatever ref this workflow ran against so a
+      #     PR touching the script tests its OWN copy.
+      - name: Run install.ps1 via irm | iex (one-liner)
+        shell: ${{ matrix.shell }}
+        env:
+          RIVET_VERSION:          v0.2.0
+          RIVET_HOME:             ${{ runner.temp }}\rivet-home-irm
+          RIVET_SKIP_TOOLCHAIN:   "1"
+          RIVET_SKIP_VS_CHECK:    "1"
+        run: |
+          $sha   = "${{ github.sha }}"
+          $url   = "https://raw.githubusercontent.com/${{ github.repository }}/$sha/bootstrap/install.ps1"
+          Write-Host "Fetching $url"
+          $script = Invoke-RestMethod -Uri $url -UseBasicParsing
+          Invoke-Expression $script
+          if ($LASTEXITCODE -ne 0) { throw "irm | iex pipeline exited $LASTEXITCODE" }
+          $exe = Join-Path $env:RIVET_HOME "bin\rivet.exe"
+          if (-not (Test-Path $exe)) { throw "rivet.exe not at $exe (irm/iex path)" }
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { throw "irm/iex-installed rivet --version exited $LASTEXITCODE" }

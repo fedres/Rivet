@@ -5,8 +5,11 @@
 [CmdletBinding()]
 param(
     [string]$Version  = $env:RIVET_VERSION,
-    [string]$HomeDir  = ($env:RIVET_HOME ?? (Join-Path $env:USERPROFILE ".rivet")),
-    [string]$BaseUrl  = ($env:RIVET_BASE_URL ?? "https://github.com/fedres/Rivet/releases/download")
+    # Note: not using `??` (PS 7+ null-coalescing) — Windows ships PS 5.1
+    # by default and `irm | iex` runs in whichever shell the user invoked.
+    # The if/else expression below works on every PowerShell from 5.0 up.
+    [string]$HomeDir  = $(if ($env:RIVET_HOME)     { $env:RIVET_HOME }     else { Join-Path $env:USERPROFILE ".rivet" }),
+    [string]$BaseUrl  = $(if ($env:RIVET_BASE_URL) { $env:RIVET_BASE_URL } else { "https://github.com/fedres/Rivet/releases/download" })
 )
 
 $ErrorActionPreference = "Stop"
@@ -180,7 +183,8 @@ try {
     # ─── PATH update ─────────────────────────────────────────────────────────
 
     $BinDir  = Join-Path $HomeDir "bin"
-    $UserPath = [Environment]::GetEnvironmentVariable("PATH", "User") ?? ""
+    $UserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+    if (-not $UserPath) { $UserPath = "" }
     $PathParts = $UserPath -split ";" | Where-Object { $_ -ne "" }
 
     if ($BinDir -notin $PathParts) {
