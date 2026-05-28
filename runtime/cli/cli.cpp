@@ -30,6 +30,7 @@
 #include <iostream>
 #include <format>
 #include <thread>
+#include <unordered_set>
 
 namespace rivet::cli {
 
@@ -84,11 +85,15 @@ int run(const Context& ctx) {
         return cmd_version(ctx);
     if (sub == "build")    return cmd_build(ctx);
     if (sub == "check")    return cmd_check(ctx);
+    if (sub == "clean")    return cmd_clean(ctx);
     if (sub == "test")     return cmd_test(ctx);
     if (sub == "run")      return cmd_run(ctx);
     if (sub == "exec")     return cmd_exec(ctx);
     if (sub == "add")      return cmd_add(ctx);
     if (sub == "remove")   return cmd_remove(ctx);
+    if (sub == "update")   return cmd_update(ctx);
+    if (sub == "tree")     return cmd_tree(ctx);
+    if (sub == "metadata") return cmd_metadata(ctx);
     if (sub == "fetch")    return cmd_fetch(ctx);
     if (sub == "new")      return cmd_new(ctx);
     if (sub == "publish")  return cmd_publish(ctx);
@@ -1628,6 +1633,280 @@ int cmd_remove(const Context& ctx) {
         (void)rivet::pkg::write_lockfile(*lock_r, rivet::pkg::lockfile_path_for(manifest));
 
     std::cout << std::format("  Removed {} from rivet.toml\n", pkg_name);
+    return 0;
+}
+
+// ─── cmd_clean ───────────────────────────────────────────────────────────────
+//
+// `rivet clean` — wipe build artefacts. By default removes `.rivet/build/`
+// and `.rivet/cmake/` only; `--all` also removes `.rivet/` (which holds the
+// cached vcpkg-installed tree + missing-packages cache + the lockfile-side
+// state). Doesn't touch rivet.toml, rivet.lock, or .git.
+
+int cmd_clean(const Context& ctx) {
+    auto args = ctx.args_after_subcommand();
+    Path cwd  = std::filesystem::current_path();
+    auto manifest_r = rivet::pkg::find_and_parse(cwd);
+    if (!manifest_r) {
+        std::cerr << "error: " << manifest_r.error().message << "\n";
+        return 1;
+    }
+    const auto& manifest = *manifest_r;
+
+    bool wipe_all = false;
+    for (auto a : args) if (a == "--all") wipe_all = true;
+
+    auto rm = [](const Path& p) -> bool {
+        if (!rivet::fs::exists(p).value_or(false)) return false;
+        auto r = rivet::fs::remove_all(p);
+        if (!r) {
+            std::cerr << "warning: could not remove " << p.string()
+                      << ": " << r.error().message << "\n";
+            return false;
+        }
+        return true;
+    };
+
+    Path rivet_dir = manifest.root_dir / ".rivet";
+    if (wipe_all) {
+        if (rm(rivet_dir))
+            std::cout << "  Removed " << rivet_dir.string() << "\n";
+    } else {
+        if (rm(rivet_dir / "build"))
+            std::cout << "  Removed .rivet/build/\n";
+        if (rm(rivet_dir / "cmake"))
+            std::cout << "  Removed .rivet/cmake/\n";
+    }
+    return 0;
+}
+
+// ─── cmd_update ──────────────────────────────────────────────────────────────
+//
+// `rivet update` — re-resolve every dependency from scratch, ignoring the
+// existing lockfile. The result is written to rivet.lock at the workspace
+// root (or this manifest's dir when standalone). Prints a diff so the user
+// can see which versions actually moved.
+
+int cmd_update(const Context& ctx) {
+    (void)ctx;
+    Path cwd = std::filesystem::current_path();
+    auto manifest_r = rivet::pkg::find_and_parse(cwd);
+    if (!manifest_r) {
+        std::cerr << "error: " << manifest_r.error().message << "\n";
+        return 1;
+    }
+    const auto& manifest = *manifest_r;
+
+    auto rivet_home_r = rivet::env::rivet_home();
+    Path home = rivet_home_r ? *rivet_home_r : Path{".rivet"};
+    auto registry = rivet::pkg::make_default_registry(home);
+
+    Path lock_path = rivet::pkg::lockfile_path_for(manifest);
+
+    // Snapshot the old lock so we can diff after.
+    std::unordered_map<std::string, std::string> old_versions;
+    if (auto old = rivet::pkg::parse_lockfile(lock_path); old) {
+        for (const auto& p : old->packages) old_versions[p.name] = p.version;
+    }
+
+    std::cout << "Updating dependencies (refreshing rivet.lock)\n";
+    rivet::pkg::Resolver r{registry};
+    auto fresh = r.resolve(manifest);
+    if (!fresh) {
+        std::cerr << "error: " << fresh.error().message << "\n";
+        return 1;
+    }
+
+    if (auto wr = rivet::pkg::write_lockfile(*fresh, lock_path); !wr) {
+        std::cerr << "error: could not write " << lock_path.string()
+                  << ": " << wr.error().message << "\n";
+        return 1;
+    }
+
+    // Diff: which packages moved.
+    size_t changed = 0, added = 0;
+    for (const auto& p : fresh->packages) {
+        auto it = old_versions.find(p.name);
+        if (it == old_versions.end()) {
+            std::cout << std::format("  + {} {}\n", p.name, p.version);
+            ++added;
+        } else if (it->second != p.version) {
+            std::cout << std::format("  ~ {} {} -> {}\n", p.name, it->second, p.version);
+            ++changed;
+        }
+    }
+    std::cout << std::format(
+        "  {} package(s) total: {} updated, {} added\n",
+        fresh->packages.size(), changed, added);
+    return 0;
+}
+
+// ─── cmd_tree ────────────────────────────────────────────────────────────────
+//
+// `rivet tree` — show the dependency graph. v0.3 cut: print the locked
+// dependencies grouped by source, with each entry's checksum and source
+// backend. Transitive deps-of-deps aren't recorded in the lockfile yet, so
+// we don't recurse — that's a v0.4 follow-up tied to either enriching the
+// lockfile or querying vcpkg per package.
+
+int cmd_tree(const Context& ctx) {
+    (void)ctx;
+    Path cwd = std::filesystem::current_path();
+    auto manifest_r = rivet::pkg::find_and_parse(cwd);
+    if (!manifest_r) {
+        std::cerr << "error: " << manifest_r.error().message << "\n";
+        return 1;
+    }
+    const auto& manifest = *manifest_r;
+
+    Path lock_path = rivet::pkg::lockfile_path_for(manifest);
+    auto lock = rivet::pkg::parse_lockfile(lock_path);
+    if (!lock) {
+        std::cerr << "error: " << lock.error().message << "\n"
+                  << "hint: run `rivet fetch` or `rivet add <pkg>` first to produce a lockfile.\n";
+        return 1;
+    }
+
+    std::string root_name    = manifest.name.empty()    ? "<workspace>" : manifest.name;
+    std::string root_version = manifest.version.empty() ? ""            : manifest.version;
+    std::cout << root_name;
+    if (!root_version.empty()) std::cout << " " << root_version;
+    std::cout << "\n";
+
+    // Mark which locked entries are direct deps of *this* manifest so the
+    // tree call-out is honest about what's "yours vs transitive."
+    std::unordered_set<std::string> direct;
+    for (const auto& [name, _] : manifest.dependencies) direct.insert(name);
+
+    // Two-pass: direct first, then everything else under a "(transitive)" header.
+    auto print_one = [&](const rivet::pkg::LockedDep& p, bool last, bool is_direct) {
+        const char* glyph = last ? "└── " : "├── ";
+        std::cout << glyph << p.name << " " << p.version;
+        if (!p.source.empty())   std::cout << " (" << p.source << ")";
+        if (!is_direct)          std::cout << " *";
+        std::cout << "\n";
+    };
+
+    std::vector<const rivet::pkg::LockedDep*> direct_deps, transitive;
+    for (const auto& p : lock->packages) {
+        (direct.count(p.name) ? direct_deps : transitive).push_back(&p);
+    }
+    for (size_t i = 0; i < direct_deps.size(); ++i)
+        print_one(*direct_deps[i],
+                  i + 1 == direct_deps.size() && transitive.empty(),
+                  /*is_direct=*/true);
+    for (size_t i = 0; i < transitive.size(); ++i)
+        print_one(*transitive[i], i + 1 == transitive.size(), /*is_direct=*/false);
+
+    std::cout << std::format(
+        "\n  {} package(s): {} direct, {} transitive\n",
+        lock->packages.size(), direct_deps.size(), transitive.size());
+    if (!transitive.empty())
+        std::cout << "  (* = transitive — pulled in by another dep)\n";
+    return 0;
+}
+
+// ─── cmd_metadata ────────────────────────────────────────────────────────────
+//
+// `rivet metadata` — emit the resolved manifest + lockfile as JSON. This is
+// the IDE-integration hook (rust-analyzer's `cargo metadata`, clangd's
+// compile_commands, etc.). The schema is intentionally close to cargo's so
+// downstream tools can reuse parsers with light tweaks.
+
+namespace {
+std::string json_escape(std::string_view s) {
+    std::string out;
+    out.reserve(s.size() + 2);
+    for (char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20)
+                    out += std::format("\\u{:04x}", static_cast<unsigned char>(c));
+                else
+                    out += c;
+        }
+    }
+    return out;
+}
+} // namespace
+
+int cmd_metadata(const Context& ctx) {
+    (void)ctx;
+    Path cwd = std::filesystem::current_path();
+    auto manifest_r = rivet::pkg::find_and_parse(cwd);
+    if (!manifest_r) {
+        std::cerr << "error: " << manifest_r.error().message << "\n";
+        return 1;
+    }
+    const auto& m = *manifest_r;
+
+    auto q = [](std::string_view s) { return std::format("\"{}\"", json_escape(s)); };
+
+    std::string out;
+    out += "{\n";
+    out += std::format(R"(  "version": 1,)" "\n");
+    out += std::format(R"(  "name": {},)"    "\n", q(m.name));
+    out += std::format(R"(  "package_version": {},)" "\n", q(m.version));
+    out += std::format(R"(  "root_dir": {},)" "\n", q(m.root_dir.string()));
+    if (!m.workspace_root.empty())
+        out += std::format(R"(  "workspace_root": {},)" "\n", q(m.workspace_root.string()));
+
+    // Dependencies.
+    out += R"(  "dependencies": [)" "\n";
+    bool first = true;
+    for (const auto& [name, spec] : m.dependencies) {
+        if (!first) out += ",\n";
+        out += std::format(
+            R"(    {{ "name": {}, "version": {}, "kind": {}, "static": {}, "workspace": {} }})",
+            q(name), q(spec.version),
+            q(spec.kind == rivet::pkg::DepKind::Path    ? "path" :
+              spec.kind == rivet::pkg::DepKind::Git     ? "git"  : "registry"),
+            spec.static_link    ? "true" : "false",
+            spec.inherit_workspace ? "true" : "false");
+        first = false;
+    }
+    out += "\n  ],\n";
+
+    // Targets ([[lib]] / [[bin]] / [[test]] / [[vendor]]).
+    out += R"(  "targets": [)" "\n";
+    first = true;
+    for (const auto& t : m.targets) {
+        if (!first) out += ",\n";
+        const char* kind =
+            t.kind == rivet::pkg::TargetKind::Lib    ? "lib"    :
+            t.kind == rivet::pkg::TargetKind::Bin    ? "bin"    :
+            t.kind == rivet::pkg::TargetKind::Test   ? "test"   :
+            t.kind == rivet::pkg::TargetKind::Vendor ? "vendor" : "unknown";
+        out += std::format(
+            R"(    {{ "name": {}, "kind": {} }})",
+            q(t.name), q(kind));
+        first = false;
+    }
+    out += "\n  ],\n";
+
+    // Locked packages (best-effort; absent if no lockfile yet).
+    out += R"(  "locked_packages": [)" "\n";
+    Path lock_path = rivet::pkg::lockfile_path_for(m);
+    if (auto lock = rivet::pkg::parse_lockfile(lock_path); lock) {
+        first = true;
+        for (const auto& p : lock->packages) {
+            if (!first) out += ",\n";
+            out += std::format(
+                R"(    {{ "name": {}, "version": {}, "source": {}, "checksum": {} }})",
+                q(p.name), q(p.version), q(p.source), q(p.checksum));
+            first = false;
+        }
+        out += "\n";
+    }
+    out += "  ]\n";
+    out += "}\n";
+
+    std::cout << out;
     return 0;
 }
 

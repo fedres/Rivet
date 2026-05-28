@@ -23,14 +23,18 @@ int run(const Context& ctx);
 // Individual command handlers — each returns an exit code.
 int cmd_build(const Context& ctx);
 int cmd_check(const Context& ctx);
+int cmd_clean(const Context& ctx);
 int cmd_test(const Context& ctx);
 int cmd_run(const Context& ctx);
 int cmd_exec(const Context& ctx);
 int cmd_add(const Context& ctx);
 int cmd_remove(const Context& ctx);
+int cmd_update(const Context& ctx);
 int cmd_fetch(const Context& ctx);
 int cmd_new(const Context& ctx);
 int cmd_publish(const Context& ctx);
+int cmd_tree(const Context& ctx);
+int cmd_metadata(const Context& ctx);
 int cmd_cache(const Context& ctx);
 int cmd_daemon(const Context& ctx);
 int cmd_toolchain(const Context& ctx);
