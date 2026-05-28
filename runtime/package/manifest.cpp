@@ -286,10 +286,12 @@ Result<Manifest> parse_manifest(const Path& path) {
             }
         }
     };
-    parse_target_array("lib",    TargetKind::Lib);
-    parse_target_array("bin",    TargetKind::Bin);
-    parse_target_array("test",   TargetKind::Test);
-    parse_target_array("vendor", TargetKind::Vendor);
+    parse_target_array("lib",     TargetKind::Lib);
+    parse_target_array("bin",     TargetKind::Bin);
+    parse_target_array("test",    TargetKind::Test);
+    parse_target_array("vendor",  TargetKind::Vendor);
+    parse_target_array("bench",   TargetKind::Bench);
+    parse_target_array("example", TargetKind::Example);
 
     if (auto* profiles = tbl.get_as<toml::table>("profiles")) {
         for (const auto& [k, v] : *profiles) {

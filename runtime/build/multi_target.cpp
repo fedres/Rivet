@@ -226,14 +226,17 @@ Path lib_path(const Path& root, std::string_view profile, std::string_view name)
 }
 
 Path bin_path(const Path& root, std::string_view profile, std::string_view name,
-              bool is_test) {
+              pkg::TargetKind kind) {
 #if defined(_WIN32)
     std::string fn = std::string(name) + ".exe";
 #else
     std::string fn = std::string(name);
 #endif
-    return build_root_for(root) / std::string(profile) /
-           (is_test ? "tests" : "bin") / fn;
+    const char* subdir =
+        kind == pkg::TargetKind::Test    ? "tests"    :
+        kind == pkg::TargetKind::Bench   ? "benches"  :
+        kind == pkg::TargetKind::Example ? "examples" : "bin";
+    return build_root_for(root) / std::string(profile) / subdir / fn;
 }
 
 // ─── Incremental-rebuild oracle (mirrors cmd_build's logic) ─────────────────
@@ -395,9 +398,8 @@ build_targets(const pkg::Manifest& manifest,
             node.command = std::move(*cmd_r);
             artefact.final_task = graph.add(std::move(node));
         } else {
-            bool is_test = (tgt.kind == pkg::TargetKind::Test);
             artefact.artifact_path = bin_path(manifest.root_dir, profile_name,
-                                              tgt.name, is_test);
+                                              tgt.name, tgt.kind);
 
             toolchain::LinkJob lj;
             lj.inputs        = obj_paths;

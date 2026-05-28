@@ -88,7 +88,7 @@ struct Profile {
 // declare each artefact explicitly via [[lib]] / [[bin]] / [[test]] /
 // [[vendor]].
 
-enum class TargetKind { Lib, Bin, Test, Vendor };
+enum class TargetKind { Lib, Bin, Test, Vendor, Bench, Example };
 
 // Cargo-style target.cfg gate. Today we honour just `os = "linux"|"macos"|
 // "windows"`. Negation and conjunctions are not implemented yet.

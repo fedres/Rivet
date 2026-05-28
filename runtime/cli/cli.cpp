@@ -88,6 +88,7 @@ int run(const Context& ctx) {
     if (sub == "check")    return cmd_check(ctx);
     if (sub == "clean")    return cmd_clean(ctx);
     if (sub == "test")     return cmd_test(ctx);
+    if (sub == "bench")    return cmd_bench(ctx);
     if (sub == "run")      return cmd_run(ctx);
     if (sub == "exec")     return cmd_exec(ctx);
     if (sub == "add")      return cmd_add(ctx);
@@ -1133,7 +1134,161 @@ int cmd_test(const Context& ctx) {
     return failed == 0 ? 0 : 1;
 }
 
-// ─── cmd_run ─────────────────────────────────────────────────────────────────
+// ─── cmd_bench ───────────────────────────────────────────────────────────────
+//
+// `rivet bench` — build every [[bench]] target and run each, like
+// `rivet test` does for [[test]]. Defaults to the release profile
+// (benchmarks against an unoptimised build are misleading). No auto-
+// discovery yet — `tests/` was easy because every C++ project agrees
+// on the convention; benchmark layouts vary too much (benches/,
+// benchmark/, perf/, micro/), so we wait for explicit [[bench]]
+// declarations rather than guess.
+
+int cmd_bench(const Context& ctx) {
+    auto args = ctx.args_after_subcommand();
+    Path cwd  = std::filesystem::current_path();
+
+    auto manifest_r = rivet::pkg::find_and_parse(cwd);
+    if (!manifest_r) {
+        std::cerr << "error: " << manifest_r.error().message << "\n";
+        return 1;
+    }
+    rivet::pkg::Manifest manifest = *manifest_r;
+
+    if (manifest.workspace.has_value() && manifest.name.empty()) {
+        // Workspace dispatch — mirror cmd_test's pattern.
+        const auto& ws = *manifest.workspace;
+        auto self = rivet::process::self_exe();
+        if (!self) {
+            std::cerr << "error: " << self.error().message << "\n";
+            return 1;
+        }
+        std::string fwd_profile{flag_value(args, "--profile").value_or("release")};
+        int total = 0, failed = 0;
+        for (const auto& m : ws.members) {
+            Path member_dir = manifest.root_dir / m;
+            if (!rivet::fs::exists(member_dir / "rivet.toml").value_or(false))
+                continue;
+            std::cout << "\n══ benching workspace member: " << m << " ══\n";
+            rivet::process::SpawnOptions opts;
+            opts.args = {self->string(), "bench", "--profile=" + fwd_profile};
+            opts.working_dir = member_dir;
+            opts.inherit_env = true;
+            ++total;
+            auto child = rivet::process::spawn(std::move(opts));
+            if (!child) { ++failed; continue; }
+            auto code = child->wait();
+            if (!code || *code != 0) ++failed;
+        }
+        std::cout << std::format(
+            "\n══ workspace bench: {} member(s), {} failed ══\n", total, failed);
+        return failed == 0 ? 0 : 1;
+    }
+
+    if (auto vr = rivet::pkg::validate(manifest); !vr) {
+        std::cerr << "error: " << vr.error().message << "\n";
+        return 1;
+    }
+
+    std::vector<size_t> selected;
+    auto filter_arg = flag_value(args, "--filter");
+    std::string filter = filter_arg.has_value() ? std::string(*filter_arg) : "";
+    if (filter.empty() && !args.empty() && args[0].substr(0, 2) != "--")
+        filter = std::string(args[0]);
+
+    for (size_t i = 0; i < manifest.targets.size(); ++i) {
+        const auto& t = manifest.targets[i];
+        if (t.kind != rivet::pkg::TargetKind::Bench) continue;
+        if (!filter.empty() && t.name.find(filter) == std::string::npos) continue;
+        selected.push_back(i);
+    }
+    if (selected.empty()) {
+        if (!filter.empty())
+            std::cout << "no [[bench]] targets matched '" << filter << "'\n";
+        else
+            std::cout << "warning: no [[bench]] targets found.\n"
+                         "hint: declare [[bench]] entries in rivet.toml.\n";
+        return 0;
+    }
+
+    auto profile = std::string{flag_value(args, "--profile").value_or("release")};
+    bool is_release = (profile == "release");
+
+    auto rivet_home_r = rivet::env::rivet_home();
+    if (!rivet_home_r) {
+        std::cerr << "error: " << rivet_home_r.error().message << "\n";
+        return 1;
+    }
+    auto tc_r = rivet::toolchain::find_active(*rivet_home_r);
+    if (!tc_r) {
+        std::cerr << "error: no toolchain available: " << tc_r.error().message << "\n"
+                  << "hint: run 'rivet toolchain install <version>' first.\n";
+        return 1;
+    }
+
+    rivet::build::BuildConfig cfg;
+    cfg.cxx_std = manifest.build.cxx_std;
+    cfg.opt     = is_release ? rivet::build::OptLevel::O2 : rivet::build::OptLevel::Debug;
+    cfg.debug   = !is_release;
+
+    rivet::build::BuildGraph graph;
+    rivet::build::InstalledExternalDeps no_deps;
+    auto art_r = rivet::build::build_targets(
+        manifest, *tc_r, cfg, no_deps, profile, graph, nullptr);
+    if (!art_r) {
+        std::cerr << "error: " << art_r.error().message << "\n";
+        return 1;
+    }
+
+    rivet::build::Executor executor{graph, std::thread::hardware_concurrency()};
+    auto summary = executor.run();
+    if (summary.failed) {
+        std::cerr << std::format("error: bench build failed ({} task(s))\n", summary.failed);
+        return 1;
+    }
+
+    std::cout << "\nRunning benchmarks\n";
+    int passed = 0, failed = 0;
+    auto t_start = rivet::time::now();
+    for (size_t idx : selected) {
+        const auto& t = manifest.targets[idx];
+        const rivet::build::TargetArtifact* art = nullptr;
+        for (const auto& a : *art_r)
+            if (a.name == t.name && a.kind == rivet::pkg::TargetKind::Bench) { art = &a; break; }
+        if (!art) { std::cerr << "  [SKIP] " << t.name << " (no artifact)\n"; ++failed; continue; }
+
+        rivet::process::SpawnOptions opts;
+        opts.args           = {art->artifact_path.string()};
+        opts.inherit_env    = true;
+        opts.working_dir    = manifest.root_dir;
+        // Bench output is the whole point — pass it through.
+        opts.capture_stdout = false;
+        opts.capture_stderr = false;
+        auto t0 = rivet::time::now();
+        auto child = rivet::process::spawn(std::move(opts));
+        if (!child) {
+            std::cerr << std::format("  [FAIL] {}  (spawn: {})\n", t.name, child.error().message);
+            ++failed; continue;
+        }
+        auto code = child->wait();
+        double ms = std::chrono::duration<double, std::milli>(rivet::time::now() - t0).count();
+        int rc = code.value_or(-1);
+        if (rc == 0) {
+            std::cout << std::format("  \033[32m[ OK ]\033[0m {}  ({:.0f} ms)\n", t.name, ms);
+            ++passed;
+        } else {
+            std::cerr << std::format("  \033[31m[FAIL]\033[0m {}  (exit {}, {:.0f} ms)\n", t.name, rc, ms);
+            ++failed;
+        }
+    }
+    double total_ms = std::chrono::duration<double, std::milli>(rivet::time::now() - t_start).count();
+    std::cout << std::format(
+        "\n  {} ran, {} passed, {} failed  [{:.1f}s]\n",
+        passed + failed, passed, failed, total_ms / 1000.0);
+    return failed == 0 ? 0 : 1;
+}
+
+// ─── cmd_run ─────────────────────────────────────────────────────────────────────
 
 // Run a user-defined [scripts] entry from rivet.toml.
 //   sh -c "<command> $@" -- <extra args after `--`>     (POSIX)
@@ -1217,12 +1372,45 @@ int cmd_run(const Context& ctx) {
             return run_script(manifest, it->first, it->second, args);
     }
 
+    // `--example=<name>` — run a declared [[example]] target instead of the
+    // package's primary binary. Mirrors cargo run --example.
+    auto example_flag = flag_value(args, "--example");
+    std::string example_name = example_flag.has_value() ? std::string(*example_flag) : "";
+    if (!example_name.empty()) {
+        bool found = false;
+        for (const auto& t : manifest.targets) {
+            if (t.kind == rivet::pkg::TargetKind::Example && t.name == example_name) {
+                found = true; break;
+            }
+        }
+        if (!found) {
+            std::cerr << "error: no [[example]] named '" << example_name
+                      << "' in this manifest\n"
+                      << "hint: declared examples are:\n";
+            for (const auto& t : manifest.targets)
+                if (t.kind == rivet::pkg::TargetKind::Example)
+                    std::cerr << "  - " << t.name << "\n";
+            return 1;
+        }
+    }
+
     // Build first.
     int build_rc = cmd_build(ctx);
     if (build_rc != 0) return build_rc;
 
     auto profile = std::string{flag_value(args, "--profile").value_or("debug")};
-    auto binary  = rivet::build::build_root_for(manifest.root_dir) / profile / "bin" / manifest.name;
+    Path binary;
+    if (!example_name.empty()) {
+        binary = rivet::build::build_root_for(manifest.root_dir) / profile / "examples" / example_name;
+    } else {
+        binary = rivet::build::build_root_for(manifest.root_dir) / profile / "bin" / manifest.name;
+    }
+#if defined(_WIN32)
+    if (!rivet::fs::exists(binary).value_or(false)) {
+        Path with_exe = binary; with_exe += ".exe";
+        if (rivet::fs::exists(with_exe).value_or(false)) binary = with_exe;
+    }
+#endif
 
     if (!rivet::fs::exists(binary).value_or(false)) {
         std::cerr << "error: binary not found: " << binary.string() << "\n";
@@ -1239,8 +1427,13 @@ int cmd_run(const Context& ctx) {
     }
 
     rivet::process::SpawnOptions run_opts;
-    run_opts.args        = std::move(run_args);
-    run_opts.inherit_env = true;
+    run_opts.args           = std::move(run_args);
+    run_opts.inherit_env    = true;
+    // Pass the child's stdout/stderr straight to ours — `rivet run` is an
+    // interactive wrapper, not a build job. Without this the binary's
+    // output gets buffered into nothingness.
+    run_opts.capture_stdout = false;
+    run_opts.capture_stderr = false;
 
     auto child_r = rivet::process::spawn(std::move(run_opts));
     if (!child_r) {
