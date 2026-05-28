@@ -36,6 +36,8 @@ int cmd_new(const Context& ctx);
 int cmd_publish(const Context& ctx);
 int cmd_tree(const Context& ctx);
 int cmd_metadata(const Context& ctx);
+int cmd_fmt(const Context& ctx);
+int cmd_completions(const Context& ctx);
 int cmd_cache(const Context& ctx);
 int cmd_daemon(const Context& ctx);
 int cmd_toolchain(const Context& ctx);

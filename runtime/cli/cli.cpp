@@ -96,6 +96,8 @@ int run(const Context& ctx) {
     if (sub == "update")   return cmd_update(ctx);
     if (sub == "tree")     return cmd_tree(ctx);
     if (sub == "metadata") return cmd_metadata(ctx);
+    if (sub == "fmt")      return cmd_fmt(ctx);
+    if (sub == "completions") return cmd_completions(ctx);
     if (sub == "fetch")    return cmd_fetch(ctx);
     if (sub == "new")      return cmd_new(ctx);
     if (sub == "publish")  return cmd_publish(ctx);
@@ -2211,6 +2213,195 @@ int cmd_metadata(const Context& ctx) {
     out += "}\n";
 
     std::cout << out;
+    return 0;
+}
+
+// ─── cmd_fmt ─────────────────────────────────────────────────────────────────
+//
+// `rivet fmt` — format the project's C++ sources via clang-format. Walks
+// src/, include/, tests/, benches/, examples/ and re-formats every
+// .cpp/.cxx/.cc/.h/.hpp/.hh in place. Looks up `clang-format` in this
+// order: bundled toolchain bin/, $PATH, system fallback.
+//
+// `--check` runs in dry-run mode (clang-format --dry-run --Werror) and
+// returns non-zero if anything would change. Useful for CI gates.
+
+namespace {
+
+Path find_clang_format(const rivet::toolchain::ToolchainInfo* tc) {
+    if (tc) {
+#if defined(_WIN32)
+        Path p = tc->root / "bin" / "clang-format.exe";
+#else
+        Path p = tc->root / "bin" / "clang-format";
+#endif
+        if (rivet::fs::exists(p).value_or(false)) return p;
+    }
+    // PATH lookup — defer to OS resolver via the `clang-format` literal.
+    return Path{"clang-format"};
+}
+
+void walk_sources_for_fmt(const Path& dir, std::vector<Path>& out) {
+    if (!rivet::fs::exists(dir).value_or(false)) return;
+    auto entries = rivet::fs::list_dir(dir);
+    if (!entries) return;
+    for (const auto& e : *entries) {
+        auto st = rivet::fs::stat(e);
+        if (!st) continue;
+        if (st->is_dir) { walk_sources_for_fmt(e, out); continue; }
+        auto ext = e.extension().string();
+        if (ext == ".cpp" || ext == ".cxx" || ext == ".cc"  ||
+            ext == ".c++" || ext == ".C"   ||
+            ext == ".h"   || ext == ".hpp" || ext == ".hh"  ||
+            ext == ".hxx" || ext == ".h++" || ext == ".inl" ||
+            ext == ".ipp" || ext == ".tpp")
+            out.push_back(e);
+    }
+}
+
+} // namespace
+
+int cmd_fmt(const Context& ctx) {
+    auto args = ctx.args_after_subcommand();
+    Path cwd  = std::filesystem::current_path();
+
+    auto manifest_r = rivet::pkg::find_and_parse(cwd);
+    if (!manifest_r) {
+        std::cerr << "error: " << manifest_r.error().message << "\n";
+        return 1;
+    }
+    const auto& manifest = *manifest_r;
+
+    bool check_mode = false;
+    for (auto a : args) if (a == "--check") check_mode = true;
+
+    // Locate clang-format — prefer the bundled toolchain copy.
+    auto rivet_home_r = rivet::env::rivet_home();
+    rivet::toolchain::ToolchainInfo tc{};
+    const rivet::toolchain::ToolchainInfo* tc_ptr = nullptr;
+    if (rivet_home_r) {
+        if (auto t = rivet::toolchain::find_active(*rivet_home_r)) {
+            tc     = std::move(*t);
+            tc_ptr = &tc;
+        }
+    }
+    Path clang_format = find_clang_format(tc_ptr);
+
+    // Collect source files.
+    std::vector<Path> sources;
+    for (auto* d : {"src", "include", "tests", "benches", "examples", "runtime", "platform"}) {
+        walk_sources_for_fmt(manifest.root_dir / d, sources);
+    }
+    if (sources.empty()) {
+        std::cout << "warning: no formatable sources found.\n";
+        return 0;
+    }
+
+    // clang-format <files...> with -i (in-place) or --dry-run --Werror.
+    rivet::process::SpawnOptions opts;
+    opts.args.push_back(clang_format.string());
+    if (check_mode) {
+        opts.args.push_back("--dry-run");
+        opts.args.push_back("--Werror");
+    } else {
+        opts.args.push_back("-i");
+    }
+    for (const auto& s : sources) opts.args.push_back(s.string());
+    opts.inherit_env    = true;
+    opts.capture_stdout = false;
+    opts.capture_stderr = false;
+
+    std::cout << (check_mode ? "Checking " : "Formatting ")
+              << sources.size() << " source file(s)...\n";
+    auto child = rivet::process::spawn(std::move(opts));
+    if (!child) {
+        std::cerr << "error: clang-format not found: " << child.error().message << "\n"
+                  << "hint: install via `rivet toolchain install <version>` or apt/brew.\n";
+        return 1;
+    }
+    auto code = child->wait();
+    int rc = code.value_or(-1);
+    if (rc != 0) {
+        if (check_mode)
+            std::cerr << "  Some files are not formatted (clang-format reported changes).\n";
+        else
+            std::cerr << "  clang-format exited " << rc << "\n";
+    } else {
+        std::cout << (check_mode ? "  All files formatted.\n" : "  Done.\n");
+    }
+    return rc;
+}
+
+// ─── cmd_completions ─────────────────────────────────────────────────────────
+//
+// `rivet completions <shell>` — print a static completion script for
+// the current command set. Pipe the output into the shell's completion
+// system, e.g.
+//
+//   rivet completions bash > /etc/bash_completion.d/rivet
+//   rivet completions zsh  > ~/.zfunc/_rivet
+//   rivet completions fish > ~/.config/fish/completions/rivet.fish
+//
+// The list of subcommands is mirrored here from run() — kept in sync by
+// hand, which is fine for now (changes are small + reviewed).
+
+int cmd_completions(const Context& ctx) {
+    auto args = ctx.args_after_subcommand();
+    std::string shell = args.empty() ? "" : std::string(args[0]);
+    if (shell.empty()) {
+        std::cerr << "usage: rivet completions <bash|zsh|fish>\n";
+        return 1;
+    }
+
+    static constexpr const char* subs[] = {
+        "build", "check", "clean", "test", "bench", "run", "exec",
+        "add", "remove", "update", "tree", "metadata", "fmt", "fetch",
+        "new", "publish", "cache", "daemon", "toolchain", "fuzz",
+        "self-update", "completions", "version", "help",
+    };
+
+    if (shell == "bash") {
+        std::cout <<
+            "# rivet bash completion. Source this file or drop in /etc/bash_completion.d/.\n"
+            "_rivet() {\n"
+            "    local cur prev cmds\n"
+            "    COMPREPLY=()\n"
+            "    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
+            "    cmds=\"";
+        for (auto* s : subs) std::cout << s << " ";
+        std::cout <<
+            "\"\n"
+            "    if [ \"$COMP_CWORD\" -eq 1 ]; then\n"
+            "        COMPREPLY=($(compgen -W \"$cmds\" -- \"$cur\"))\n"
+            "    fi\n"
+            "    return 0\n"
+            "}\n"
+            "complete -F _rivet rivet\n";
+    } else if (shell == "zsh") {
+        std::cout <<
+            "#compdef rivet\n"
+            "_rivet() {\n"
+            "    local -a cmds\n"
+            "    cmds=(\n";
+        for (auto* s : subs) std::cout << "        '" << s << "'\n";
+        std::cout <<
+            "    )\n"
+            "    _arguments -C \\\n"
+            "        '1: :->command' \\\n"
+            "        '*::arg:->args'\n"
+            "    case $state in\n"
+            "        command) _describe 'command' cmds ;;\n"
+            "    esac\n"
+            "}\n"
+            "_rivet \"$@\"\n";
+    } else if (shell == "fish") {
+        std::cout << "# rivet fish completion. Drop in ~/.config/fish/completions/rivet.fish\n";
+        for (auto* s : subs)
+            std::cout << "complete -c rivet -n '__fish_use_subcommand' -a '" << s << "'\n";
+    } else {
+        std::cerr << "error: unknown shell '" << shell << "' (expected bash, zsh, or fish)\n";
+        return 1;
+    }
     return 0;
 }
 
