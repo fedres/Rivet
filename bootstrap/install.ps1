@@ -1,11 +1,11 @@
-# bootstrap/install.ps1 — Rivet one-line installer for Windows
+# bootstrap/install.ps1 -- Rivet one-line installer for Windows
 # Usage: irm https://releases.rivet.build/install.ps1 | iex
 #   Or:  $env:RIVET_VERSION="0.2.0"; irm https://releases.rivet.build/install.ps1 | iex
 
 [CmdletBinding()]
 param(
     [string]$Version  = $env:RIVET_VERSION,
-    # Note: not using `??` (PS 7+ null-coalescing) — Windows ships PS 5.1
+    # Note: not using `??` (PS 7+ null-coalescing) -- Windows ships PS 5.1
     # by default and `irm | iex` runs in whichever shell the user invoked.
     # The if/else expression below works on every PowerShell from 5.0 up.
     [string]$HomeDir  = $(if ($env:RIVET_HOME)     { $env:RIVET_HOME }     else { Join-Path $env:USERPROFILE ".rivet" }),
@@ -15,7 +15,7 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference    = "SilentlyContinue"   # Invoke-WebRequest is 10x faster without progress
 
-# ─── Architecture detection ───────────────────────────────────────────────────
+# --- Architecture detection ---------------------------------------------------
 
 $Arch = switch ($env:PROCESSOR_ARCHITECTURE) {
     "AMD64" { "x86_64" }
@@ -25,11 +25,11 @@ $Arch = switch ($env:PROCESSOR_ARCHITECTURE) {
 
 $Triple = "windows-$Arch"
 
-# ─── Visual Studio Build Tools detection (cargo-style) ───────────────────────
+# --- Visual Studio Build Tools detection (cargo-style) -----------------------
 #
 # Rivet ships its own clang-cl + lld-link, but Microsoft's licence forbids
 # redistributing the Windows SDK (kernel32.lib, the UCRT, windows.h). Cargo
-# hits the same wall — `rustup-init.exe` prompts and installs Build Tools
+# hits the same wall -- `rustup-init.exe` prompts and installs Build Tools
 # via the same winget workload below. We do the equivalent.
 #
 # Detection order: vswhere (the official MS tool, installed with VS 2017+),
@@ -40,7 +40,7 @@ $Triple = "windows-$Arch"
 function Test-VSBuildToolsInstalled {
     if ($env:RIVET_SKIP_VS_CHECK -eq "1") { return $true }
 
-    # vswhere — installed with any VS 2017+ at a stable known path.
+    # vswhere -- installed with any VS 2017+ at a stable known path.
     $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
     if (Test-Path $vswhere) {
         $found = & $vswhere -products * `
@@ -79,7 +79,7 @@ function Install-VSBuildTools {
     $proceed = $auto
     if (-not $auto) {
         # If running non-interactively (piped from iex without a TTY) we
-        # can't prompt — bail with instructions instead of hanging.
+        # can't prompt -- bail with instructions instead of hanging.
         $isInteractive = [Environment]::UserInteractive -and
                          -not ([Console]::IsInputRedirected)
         if ($isInteractive) {
@@ -87,7 +87,7 @@ function Install-VSBuildTools {
             $proceed = ($ans -eq "" -or $ans -ieq "y" -or $ans -ieq "yes")
         } else {
             # Single-quoted here-string: no variable expansion, no
-            # backtick-escape gymnastics — works identically on PS 5.1
+            # backtick-escape gymnastics -- works identically on PS 5.1
             # and PS 7. The earlier double-quoted form mixed `$ and `"
             # escapes and tripped PS 5.1's tokenizer in some envs.
             $hint = @'
@@ -123,7 +123,7 @@ if (-not (Test-VSBuildToolsInstalled)) {
     Install-VSBuildTools
 }
 
-# ─── Version resolution ───────────────────────────────────────────────────────
+# --- Version resolution -------------------------------------------------------
 
 if (-not $Version) {
     Write-Host "Fetching latest Rivet release..."
@@ -146,9 +146,9 @@ $Archive    = "$BundleName.zip"
 $BundleUrl  = "$BaseUrl/$Version/$Archive"
 $ShaUrl     = "$BundleUrl.sha256"
 
-Write-Host "Installing Rivet $Version ($Triple) → $HomeDir ..."
+Write-Host "Installing Rivet $Version ($Triple) -> $HomeDir ..."
 
-# ─── Download ─────────────────────────────────────────────────────────────────
+# --- Download -----------------------------------------------------------------
 
 $TmpDir = Join-Path $env:TEMP "rivet_install_$([System.Guid]::NewGuid().ToString('N').Substring(0,8))"
 New-Item -ItemType Directory -Force -Path $TmpDir | Out-Null
@@ -158,7 +158,7 @@ try {
     Write-Host "Downloading $BundleUrl ..."
     Invoke-WebRequest -Uri $BundleUrl -OutFile $ZipPath -UseBasicParsing
 
-    # ─── Checksum verification ────────────────────────────────────────────────
+    # --- Checksum verification ------------------------------------------------
 
     try {
         $ShaFile = Join-Path $TmpDir "$Archive.sha256"
@@ -170,15 +170,15 @@ try {
         }
         Write-Host "Checksum verified."
     } catch [System.Net.WebException] {
-        Write-Warning "Checksum file not available — skipping verification."
+        Write-Warning "Checksum file not available -- skipping verification."
     }
 
-    # ─── Extract ──────────────────────────────────────────────────────────────
+    # --- Extract --------------------------------------------------------------
 
     New-Item -ItemType Directory -Force -Path $HomeDir | Out-Null
     Expand-Archive -Path $ZipPath -DestinationPath $TmpDir -Force
 
-    # Bundle unpacks to a versioned subdir — move contents into $HomeDir.
+    # Bundle unpacks to a versioned subdir -- move contents into $HomeDir.
     $Extracted = Join-Path $TmpDir $BundleName
     if (Test-Path $Extracted) {
         Copy-Item -Recurse -Force "$Extracted\*" $HomeDir
@@ -187,7 +187,7 @@ try {
         Expand-Archive -Path $ZipPath -DestinationPath $HomeDir -Force
     }
 
-    # ─── PATH update ─────────────────────────────────────────────────────────
+    # --- PATH update ---------------------------------------------------------
 
     $BinDir  = Join-Path $HomeDir "bin"
     $UserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
@@ -201,7 +201,7 @@ try {
         Write-Host "Restart your terminal for the change to take effect."
     }
 
-    # ─── LLVM toolchain bootstrap ────────────────────────────────────────────
+    # --- LLVM toolchain bootstrap --------------------------------------------
     # Published by publish-toolchain.yml. Set $env:RIVET_SKIP_TOOLCHAIN=1 to
     # skip; $env:RIVET_LLVM_VERSION overrides the default version.
 
@@ -217,7 +217,7 @@ try {
 
         if ($HasToolchain) {
             Write-Host ""
-            Write-Host "Toolchain already installed — skipping bootstrap."
+            Write-Host "Toolchain already installed -- skipping bootstrap."
         } else {
             Write-Host ""
             Write-Host "Installing LLVM toolchain $LlvmVersion ..."
@@ -233,7 +233,7 @@ try {
         }
     }
 
-    # ─── Done ─────────────────────────────────────────────────────────────────
+    # --- Done -----------------------------------------------------------------
 
     Write-Host ""
     Write-Host "Rivet $Version installed to $HomeDir"
