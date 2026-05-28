@@ -31,19 +31,22 @@ concurrency:
 
 jobs:
   install:
-    name: install.ps1 / ${{ matrix.runner }} / ${{ matrix.shell }}
+    name: install.ps1 / ${{ matrix.runner }} / ${{ matrix.psh }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         runner: [windows-2022, windows-2025]
-        shell:  [powershell, pwsh]
+        # Named `psh` not `shell` — GitHub Actions step-level `shell:` is a
+        # reserved keyword and a matrix variable of the same name confuses
+        # the workflow parser ("Unrecognized named-value: 'matrix'").
+        psh: [powershell, pwsh]
         exclude:
-          # windows-2025 currently fails ARM SDK auto-discovery in vswhere.
-          # Skip until that's resolved — windows-2022 covers the gate.
+          # windows-2025 image lacks Windows PS 5.1 in some configurations.
+          # Skip until verified — windows-2022 covers the legacy-shell gate.
           - runner: windows-2025
-            shell:  powershell
+            psh:    powershell
 
     steps:
       - name: Checkout
@@ -58,7 +61,7 @@ jobs:
       # installer). Pin to v0.2.0 so we don't depend on the GitHub API
       # nor on a "latest" release tag drifting.
       - name: Run install.ps1 from local checkout
-        shell: ${{ matrix.shell }}
+        shell: ${{ matrix.psh }}
         env:
           RIVET_VERSION:          v0.2.0
           RIVET_HOME:             ${{ runner.temp }}\rivet-home
@@ -70,7 +73,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "install.ps1 exited $LASTEXITCODE" }
 
       - name: Verify rivet --version
-        shell: ${{ matrix.shell }}
+        shell: ${{ matrix.psh }}
         env:
           RIVET_HOME: ${{ runner.temp }}\rivet-home
         run: |
@@ -85,7 +88,7 @@ jobs:
       #     repo's raw URL on whatever ref this workflow ran against so a
       #     PR touching the script tests its OWN copy.
       - name: Run install.ps1 via irm | iex (one-liner)
-        shell: ${{ matrix.shell }}
+        shell: ${{ matrix.psh }}
         env:
           RIVET_VERSION:          v0.2.0
           RIVET_HOME:             ${{ runner.temp }}\rivet-home-irm
