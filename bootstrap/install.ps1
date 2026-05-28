@@ -86,9 +86,16 @@ function Install-VSBuildTools {
             $ans = Read-Host "Install via winget now? [Y/n]"
             $proceed = ($ans -eq "" -or $ans -ieq "y" -or $ans -ieq "yes")
         } else {
-            Write-Host "Re-run with `$env:RIVET_AUTO_INSTALL_VS=1 to install automatically, or run:" -ForegroundColor Yellow
-            Write-Host "  winget install --id Microsoft.VisualStudio.2022.BuildTools ``" -ForegroundColor Yellow
-            Write-Host "    --override `"--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended`"" -ForegroundColor Yellow
+            # Single-quoted here-string: no variable expansion, no
+            # backtick-escape gymnastics — works identically on PS 5.1
+            # and PS 7. The earlier double-quoted form mixed `$ and `"
+            # escapes and tripped PS 5.1's tokenizer in some envs.
+            $hint = @'
+Re-run with $env:RIVET_AUTO_INSTALL_VS=1 to install automatically, or run:
+  winget install --id Microsoft.VisualStudio.2022.BuildTools `
+    --override "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+'@
+            Write-Host $hint -ForegroundColor Yellow
             throw "Visual Studio Build Tools required (non-interactive)."
         }
     }
