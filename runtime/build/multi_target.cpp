@@ -1,6 +1,7 @@
 // runtime/build/multi_target.cpp — multi-artefact build engine
 #include "multi_target.hpp"
 
+#include "paths.hpp"
 #include "../toolchain/compile.hpp"
 #include "../toolchain/triple.hpp"
 #include "../cache/store.hpp"
@@ -216,10 +217,11 @@ topo_targets(const std::vector<pkg::Target>& targets) {
 // ─── Artefact paths (per target) ────────────────────────────────────────────
 
 Path lib_path(const Path& root, std::string_view profile, std::string_view name) {
+    Path base = build_root_for(root) / std::string(profile) / "lib";
 #if defined(_WIN32)
-    return root / ".rivet" / "build" / std::string(profile) / "lib" / (std::string(name) + ".lib");
+    return base / (std::string(name) + ".lib");
 #else
-    return root / ".rivet" / "build" / std::string(profile) / "lib" / ("lib" + std::string(name) + ".a");
+    return base / ("lib" + std::string(name) + ".a");
 #endif
 }
 
@@ -230,7 +232,7 @@ Path bin_path(const Path& root, std::string_view profile, std::string_view name,
 #else
     std::string fn = std::string(name);
 #endif
-    return root / ".rivet" / "build" / std::string(profile) /
+    return build_root_for(root) / std::string(profile) /
            (is_test ? "tests" : "bin") / fn;
 }
 
@@ -273,7 +275,7 @@ build_targets(const pkg::Manifest& manifest,
     std::unordered_map<std::string, TargetArtifact> by_name;
 
     auto obj_dir_for = [&](const std::string& tname) {
-        return manifest.root_dir / ".rivet" / "build" / std::string(profile_name)
+        return build_root_for(manifest.root_dir) / std::string(profile_name)
                / "obj" / tname;
     };
 

@@ -11,6 +11,7 @@
 #include "../build/pkgconfig.hpp"
 #include "../build/multi_target.hpp"
 #include "../build/cmake_drive.hpp"
+#include "../build/paths.hpp"
 #include "../toolchain/sdk.hpp"
 #include "../archive/tar_zst.hpp"
 #include "../cache/store.hpp"
@@ -655,7 +656,7 @@ int cmd_build(const Context& ctx) {
     std::vector<rivet::build::TaskId> obj_task_ids;
     std::vector<Path>                 obj_paths;
 
-    auto obj_dir = manifest.root_dir / ".rivet" / "build" / profile_name / "obj";
+    auto obj_dir = rivet::build::build_root_for(manifest.root_dir) / profile_name / "obj";
 
     for (const auto& src : sources) {
         // .rivet/build/<profile>/obj/<rel_path>.o
@@ -703,7 +704,7 @@ int cmd_build(const Context& ctx) {
     }
 
     // 7. Link step: all object files → binary.
-    auto bin_dir    = manifest.root_dir / ".rivet" / "build" / profile_name / "bin";
+    auto bin_dir    = rivet::build::build_root_for(manifest.root_dir) / profile_name / "bin";
     auto bin_output = bin_dir / manifest.name;
 
     rivet::toolchain::LinkJob lj;
@@ -1221,7 +1222,7 @@ int cmd_run(const Context& ctx) {
     if (build_rc != 0) return build_rc;
 
     auto profile = std::string{flag_value(args, "--profile").value_or("debug")};
-    auto binary  = manifest.root_dir / ".rivet" / "build" / profile / "bin" / manifest.name;
+    auto binary  = rivet::build::build_root_for(manifest.root_dir) / profile / "bin" / manifest.name;
 
     if (!rivet::fs::exists(binary).value_or(false)) {
         std::cerr << "error: binary not found: " << binary.string() << "\n";
@@ -2519,7 +2520,7 @@ int cmd_fuzz(const Context& ctx) {
     rivet::build::BuildGraph graph;
     std::vector<rivet::build::TaskId> obj_ids;
     std::vector<Path> obj_paths;
-    auto obj_dir = manifest.root_dir / ".rivet" / "build" / "fuzz" / "obj";
+    auto obj_dir = rivet::build::build_root_for(manifest.root_dir) / "fuzz" / "obj";
 
     for (const auto& src : sources) {
         auto rel      = src.lexically_relative(manifest.root_dir);
@@ -2541,7 +2542,7 @@ int cmd_fuzz(const Context& ctx) {
         obj_paths.push_back(out_path);
     }
 
-    auto fuzz_bin = manifest.root_dir / ".rivet" / "build" / "fuzz" / "bin"
+    auto fuzz_bin = rivet::build::build_root_for(manifest.root_dir) / "fuzz" / "bin"
                   / (manifest.name + "-fuzz-" + target_fn);
 
     rivet::toolchain::LinkJob lj;
