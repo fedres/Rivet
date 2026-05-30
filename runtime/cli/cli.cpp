@@ -12,6 +12,7 @@
 #include "../build/multi_target.hpp"
 #include "../build/cmake_drive.hpp"
 #include "../build/paths.hpp"
+#include "../build/dep_file.hpp"
 #include "../toolchain/sdk.hpp"
 #include "../archive/tar_zst.hpp"
 #include "../cache/store.hpp"
@@ -687,15 +688,21 @@ int cmd_build(const Context& ctx) {
         }
 
         rivet::build::TaskNode node;
-        node.name    = src.filename().string();
-        node.kind    = rivet::build::TaskKind::Compile;
-        node.outputs = {{ out_path, true }};
-        node.command = std::move(*cmd_r);
+        node.name          = src.filename().string();
+        node.kind          = rivet::build::TaskKind::Compile;
+        node.outputs       = {{ out_path, true }};
+        node.command       = std::move(*cmd_r);
+        node.tool_version  = tc.version;
+        node.target_triple = cfg.target_triple;
 
         // Hash source file for cache key derivation.
         std::string src_hash;
         if (auto hr = rivet::cache::sha256_file(src)) src_hash = std::move(*hr);
         node.inputs = {{ src, std::move(src_hash) }};
+
+        // D1: if a previous build left a .d file, fold every transitive header
+        // hash into the key so a header edit invalidates this .o's cache entry.
+        rivet::build::augment_inputs_with_dep_file(node, dep_file);
 
         // Derive cache key (command + input hashes must be populated first).
         if (auto kr = rivet::cache::derive_key(node, tc.version, cfg.target_triple))

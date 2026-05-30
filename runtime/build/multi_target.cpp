@@ -2,6 +2,7 @@
 #include "multi_target.hpp"
 
 #include "paths.hpp"
+#include "dep_file.hpp"
 #include "../toolchain/compile.hpp"
 #include "../toolchain/triple.hpp"
 #include "../cache/store.hpp"
@@ -356,14 +357,21 @@ build_targets(const pkg::Manifest& manifest,
                     "compile command (" + tgt.name + "/" + rel + "): " + cmd_r.error().message);
 
             TaskNode node;
-            node.name    = src.filename().string() + " [" + tgt.name + "]";
-            node.kind    = TaskKind::Compile;
-            node.outputs = {{ out_path, true }};
-            node.command = std::move(*cmd_r);
+            node.name          = src.filename().string() + " [" + tgt.name + "]";
+            node.kind          = TaskKind::Compile;
+            node.outputs       = {{ out_path, true }};
+            node.command       = std::move(*cmd_r);
+            node.tool_version  = tc.version;
+            node.target_triple = base_cfg.target_triple;
 
             std::string src_hash;
             if (auto hr = cache::sha256_file(src)) src_hash = std::move(*hr);
             node.inputs = {{ src, std::move(src_hash) }};
+
+            // D1: fold transitive header hashes into the cache key if a
+            // previous build's .d file exists. The dep_file variable was
+            // computed a few lines above for the up-to-date check.
+            augment_inputs_with_dep_file(node, dep_file);
 
             if (auto kr = cache::derive_key(node, tc.version, base_cfg.target_triple))
                 node.cache_key = std::move(*kr);

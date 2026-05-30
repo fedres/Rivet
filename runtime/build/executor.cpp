@@ -1,5 +1,7 @@
 // runtime/build/executor.cpp — thread-pool build executor
 #include "executor.hpp"
+#include "dep_file.hpp"
+#include "../cache/key.hpp"
 #include "../../platform/interface/process.hpp"
 #include "../../platform/interface/time.hpp"
 #include "../../platform/interface/fs.hpp"
@@ -7,6 +9,7 @@
 #include <algorithm>
 #include <format>
 #include <thread>
+#include <unordered_set>
 
 namespace rivet::build {
 
@@ -234,12 +237,51 @@ TaskResult Executor::execute_task(const TaskNode& task) {
     r.stdout_out = child.stdout_output();
     r.stderr_out = child.stderr_output();
 
+    // ── D1: augment cache key with transitive header hashes (post-compile) ──
+    //
+    // The construction-time cache_key was derived from the source file alone --
+    // it's the right key for the FIRST build (no .d file yet) but a stale key
+    // on subsequent builds, because clang's .d file lists every header the
+    // translation unit pulled in. We re-derive after compile using the
+    // populated .d file so the same logical inputs hash to the same key on
+    // every subsequent build (which is exactly what `derive_key` with the
+    // augmented input list will produce at construction time on the next run).
+    std::optional<build::CacheKey> augmented_key;
+    if (r.success && task.command && task.cache_key && !task.cache_key->empty()) {
+        // Locate the .d file argument: clang emits `-MF <path>`.
+        const auto& args = task.command->args;
+        Path dep_path;
+        for (size_t i = 0; i + 1 < args.size(); ++i) {
+            if (args[i] == "-MF") { dep_path = Path{args[i + 1]}; break; }
+        }
+        if (!dep_path.empty() && rivet::fs::exists(dep_path).value_or(false)) {
+            TaskNode aug = task;  // mutate a copy; the graph stays frozen.
+            augment_inputs_with_dep_file(aug, dep_path);
+            // Reuse the same derive_key overload the graph builder used at
+            // construction time so the augmented key is bit-identical to what
+            // a future graph build will compute on its first lookup.
+            if (auto kr = cache::derive_key(aug, aug.tool_version, aug.target_triple)) {
+                augmented_key = std::move(*kr);
+            }
+        }
+    }
+
     // ── Store successful output in local + remote cache ──────────────────────
+    //
+    // Store under BOTH the original key (so this run is internally consistent
+    // and re-runs without a .d file still hit) AND the augmented key (so the
+    // next build's construction-time lookup -- which re-parses the .d -- can
+    // hit without compiling).
     if (r.success && cache_ && task.cache_key && !task.cache_key->empty()) {
         for (const auto& out : task.outputs) {
             if (out.primary && rivet::fs::exists(out.path).value_or(false)) {
                 (void)cache_->put(*task.cache_key, out.path);
                 cache_->push_remote(*task.cache_key, out.path);
+                if (augmented_key && !augmented_key->empty() &&
+                    *augmented_key != *task.cache_key) {
+                    (void)cache_->put(*augmented_key, out.path);
+                    cache_->push_remote(*augmented_key, out.path);
+                }
             }
         }
     }

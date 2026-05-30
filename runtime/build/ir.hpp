@@ -113,6 +113,14 @@ struct TaskNode {
     // Populated during graph preparation; empty means "not yet computed".
     std::optional<CacheKey>  cache_key;
 
+    // D1: the executor needs the same tool_version + target_triple the graph
+    // builder used at construction time so it can re-derive the cache key
+    // after compile (folding in transitive header hashes from clang's .d).
+    // Identical strings on both sides keep `derive_key` deterministic across
+    // construction-time and post-compile invocations.
+    std::string              tool_version;
+    std::string              target_triple;
+
     // Execution state (set by Executor — treat as mutable scheduler data).
     enum class State : uint8_t { Pending, Ready, Running, Done, Failed, Skipped };
     State state = State::Pending;
