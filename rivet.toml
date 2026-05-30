@@ -19,7 +19,7 @@
 
 [package]
 name        = "rivet"
-version     = "0.1.0"
+version     = "0.2.1"
 description = "C++ build system, package manager, and toolchain"
 license     = "MIT"
 repository  = "https://github.com/fedres/Rivet"
