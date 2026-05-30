@@ -15,12 +15,15 @@ No prior compiler. No system package manager. No `apt install build-essential` /
 own libc++, fetches its own dependencies, builds them in a hermetic per-project
 tree, and produces a working binary.
 
-The single non-redistributable prereq is the platform SDK on macOS (Xcode —
-the installer points you at `xcode-select --install`). Linux ships glibc +
-kernel headers with every distro. **Windows needs nothing** — rivet bundles
-llvm-mingw (LLVM + MinGW-w64 + libc++ all in one), so the install is
-hermetic without Visual Studio Build Tools or the Windows SDK. Same
-approach Zig uses.
+**No special prerequisites on any platform.** Linux ships glibc + kernel
+headers with every distro. Windows used to need Visual Studio Build Tools;
+rivet now bundles llvm-mingw (LLVM + MinGW-w64 + libc++ all in one), same
+approach Zig uses, so the install is hermetic. macOS expects the standard
+Xcode Command Line Tools that every C/C++ toolchain on macOS needs —
+not a rivet thing; cargo, brew, gcc, anything you'd build with all want
+them too. Apple's licence doesn't let any third-party tool redistribute
+the frameworks. If you ever ran `cc` on a Mac before, you already have
+them.
 
 ---
 

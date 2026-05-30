@@ -23,16 +23,14 @@ rivet --version
 
 ### Platform prereqs
 
-Rivet ships its own clang and libc++. It cannot ship Apple's frameworks
-(licensed). On Windows it bundles llvm-mingw, which carries the Windows
-SDK pieces it needs — same approach Zig uses — so the install is
-hermetic out of the box.
+**No special prereqs on any platform** — rivet ships its own clang, libc++,
+linker, and (on Windows) MinGW-w64 SDK pieces.
 
-| Platform | Prereq | How |
+| Platform | What rivet needs | Notes |
 |---|---|---|
-| **Linux** | none | glibc + kernel headers come with every distro |
-| **macOS** | Xcode Command Line Tools | `xcode-select --install` (one-time, ~1 GB) |
-| **Windows** | none | rivet ships llvm-mingw (LLVM + MinGW-w64 + libc++) — no Build Tools required |
+| **Linux** | nothing | glibc + kernel headers ship with every distro |
+| **Windows** | nothing | rivet bundles llvm-mingw (LLVM + MinGW-w64 + libc++) — no Build Tools, no Windows SDK install, no winget prompt |
+| **macOS** | Xcode CLI tools | the baseline every C/C++ toolchain on macOS needs (cargo, brew, gcc, anything). If you've ever run `cc` on a Mac, you already have them. If not: `xcode-select --install` (one-time, ~1 GB). Apple's licence doesn't let any third-party tool redistribute the frameworks. |
 
 ## 2. Install a toolchain
 

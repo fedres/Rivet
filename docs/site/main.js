@@ -15,7 +15,7 @@
             label: "macos",
             command: `<span class="prompt">$</span> curl -fsSL <span class="url">${BASE}/install.sh</span> | sh`,
             plain:  `curl -fsSL ${BASE}/install.sh | sh`,
-            prereq: "one-time prereq: <strong>xcode-select --install</strong>  (Xcode Command Line Tools, ~1&nbsp;GB).",
+            prereq: "<strong>no rivet-specific prereq</strong> &mdash; macOS expects the standard Xcode CLI tools that <em>every</em> C/C++ toolchain on macOS needs (cargo, brew, gcc, anything). If you've ever run <code>cc</code>, you have them. If not: <code>xcode-select --install</code> (one-time, ~1&nbsp;GB).",
         },
         windows: {
             label: "windows",

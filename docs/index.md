@@ -47,10 +47,12 @@ flow. Rivet does the same for C++:
 - self-hosts: every release of rivet is built by rivet, from a
   `rivet.toml`, with no cmake in the trace.
 
-The single non-redistributable prereq is the platform SDK — Apple's
-frameworks and Microsoft's Windows Kits are licensed and cannot be
-shipped. The installer detects + auto-installs on Windows (`winget`),
-prompts on macOS (`xcode-select --install`), and is a no-op on Linux.
+Rivet is hermetic on Linux and Windows out of the box. On Windows it
+bundles llvm-mingw (LLVM + MinGW-w64 + libc++), so no Visual Studio
+Build Tools install is needed — same approach Zig uses. On macOS,
+you'll want the standard Xcode CLI tools that every C/C++ toolchain
+expects (`xcode-select --install` if you don't already have them) —
+that's a macOS baseline, not a rivet-specific ask.
 
 ## Status
 
