@@ -2742,7 +2742,7 @@ int cmd_toolchain(const Context& ctx) {
         triple = "x86_64-linux-gnu";
 #  endif
 #elif defined(_WIN32)
-        triple = "x86_64-windows-msvc";
+        triple = "x86_64-windows-gnu";
 #else
         triple = "unknown";
 #endif
@@ -3000,7 +3000,7 @@ int cmd_self_update(const Context& /*ctx*/) {
     triple = "x86_64-linux-gnu";
 #  endif
 #elif defined(_WIN32)
-    triple = "x86_64-windows-msvc";
+    triple = "x86_64-windows-gnu";
 #else
     std::cerr << "error: self-update not supported on this platform.\n";
     return 1;

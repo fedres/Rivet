@@ -107,10 +107,13 @@ Os   os()   { return Os::Windows; }
 LibC libc() { return LibC::MSVC; }
 
 std::string host_triple() {
+    // Rivet ships llvm-mingw on Windows (LLVM + MinGW-w64 + libc++), not
+    // the MSVC SDK -- so the host triple is the GNU ABI, not msvc. This
+    // removes the VS Build Tools prerequisite from `rivet build`.
     switch (arch()) {
-        case Arch::X64:   return "x86_64-pc-windows-msvc";
-        case Arch::Arm64: return "aarch64-pc-windows-msvc";
-        default:          return "unknown-pc-windows-msvc";
+        case Arch::X64:   return "x86_64-pc-windows-gnu";
+        case Arch::Arm64: return "aarch64-pc-windows-gnu";
+        default:          return "unknown-pc-windows-gnu";
     }
 }
 

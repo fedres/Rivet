@@ -26,12 +26,14 @@ std::string_view vcpkg_triplet_base(std::string_view rivet_triple) {
     if (rivet_triple.starts_with("aarch64-linux"))return "arm64-linux";
     if (rivet_triple.starts_with("arm64-apple"))  return "arm64-osx";
     if (rivet_triple.starts_with("x86_64-apple")) return "x64-osx";
-    if (rivet_triple.starts_with("x86_64-windows")) return "x64-windows-static";
+    // Windows: rivet ships llvm-mingw, so we use the mingw triplet, not
+    // x64-windows-static (MSVC). Both are upstream vcpkg-supported.
+    if (rivet_triple.starts_with("x86_64-windows")) return "x64-mingw-static";
     return "x64-linux";
 }
 
 #if defined(_WIN32)
-constexpr const char* kHostTriple = "x86_64-windows-msvc";
+constexpr const char* kHostTriple = "x86_64-windows-gnu";
 #elif defined(__APPLE__) && defined(__aarch64__)
 constexpr const char* kHostTriple = "arm64-apple-macos";
 #elif defined(__APPLE__)
@@ -102,11 +104,10 @@ Result<Path> ensure_vcpkg_cli(const Path& vcpkg_root) {
 // Generate the overlay triplet that forces vcpkg's CMake-driven port builds
 // to use our bundled clang. Returns the overlay-triplet directory path.
 //
-// Platform-specific compiler selection:
-//   POSIX: clang / clang++ / lld / llvm-ar             (GNU ABI)
-//   Win:   clang-cl / clang-cl / lld-link / llvm-lib   (MSVC ABI — required
-//                                                       to match vcpkg's
-//                                                       x64-windows triplet)
+// Compiler selection (uniform across platforms now that Windows ships
+// llvm-mingw): clang / clang++ / lld / llvm-ar — GNU ABI. The Windows
+// special-case for clang-cl / lld-link / llvm-lib is gone, since the
+// MSVC ABI is no longer the target.
 Result<Path> write_overlay_triplet(const Path& vcpkg_root,
                                     std::string_view triplet_name,
                                     std::string_view rivet_triple,
@@ -115,29 +116,8 @@ Result<Path> write_overlay_triplet(const Path& vcpkg_root,
     if (auto r = rivet::fs::create_dirs(overlay_dir); !r)
         return make_error<Path>(r.error().message);
 
-    // generic_string() converts to forward slashes — safe in CMake double-quoted
+    // generic_string() converts to forward slashes -- safe in CMake double-quoted
     // strings on every platform. ToolchainInfo already appends .exe on Windows.
-#if defined(_WIN32)
-    // On Windows we use the MSVC-compatible LLVM driver (`clang-cl`) so the
-    // ABI matches vcpkg's CRT linkage; on POSIX the regular driver is right.
-    // llvm-lib subsumes ranlib on Windows — it's an archive *creator*, not
-    // a ranlib invoke-with-no-args (the failure mode we hit on POSIX with
-    // llvm-ar).
-    std::string cc_path     = tc.clang_cl().generic_string();
-    std::string cxx_path    = cc_path;
-    std::string ar_path     = tc.llvm_lib().generic_string();
-    std::string ld_path     = tc.lld_link().generic_string();
-    std::string ranlib_path = ar_path;
-    // CMake's vs_link_exe wrapper insists on invoking a Resource Compiler
-    // for manifest embedding even on header-only ports like fmt. The
-    // system rc.exe (from Windows Kits) doesn't always cooperate with
-    // CMake's wrapper — vcpkg's fmt build on a fresh runner reports
-    // "RC Pass 1: ... failed (exit code 0)" and no .res file. llvm-rc is
-    // a clang-shipped drop-in replacement that the same wrapper drives
-    // reliably.
-    std::string rc_path     = (tc.root / "bin" / "llvm-rc.exe").generic_string();
-    std::string mt_path     = (tc.root / "bin" / "llvm-mt.exe").generic_string();
-#else
     std::string cc_path     = tc.clang().generic_string();
     std::string cxx_path    = tc.clangpp().generic_string();
     std::string ar_path     = tc.llvm_ar().generic_string();
@@ -147,6 +127,12 @@ Result<Path> write_overlay_triplet(const Path& vcpkg_root,
     // any operation flag, so pointing RANLIB at llvm-ar makes llvm-ar error
     // with "expected [relpos] for 'a', 'b', or 'i' modifier".
     std::string ranlib_path = tc.llvm_ranlib().generic_string();
+#if defined(_WIN32)
+    // Windows resource compiler / manifest tool, both shipped by llvm-mingw.
+    // vcpkg's mingw triplet doesn't drive these directly, but CMake ports
+    // that call enable_language(RC) still look them up.
+    std::string rc_path     = (tc.root / "bin" / "llvm-rc.exe").generic_string();
+    std::string mt_path     = (tc.root / "bin" / "llvm-mt.exe").generic_string();
 #endif
 
     // Chainload toolchain file: pins CC/CXX/AR to the bundled binaries.
@@ -166,15 +152,13 @@ Result<Path> write_overlay_triplet(const Path& vcpkg_root,
 #if defined(_WIN32)
         "set(CMAKE_RC_COMPILER  \"{}\" CACHE FILEPATH \"\")\n"
         "set(CMAKE_MT           \"{}\" CACHE FILEPATH \"\")\n"
-        // Pin the static CRT for every vcpkg port we drive on Windows.
-        // The x64-windows-static-rivet triplet inherits VCPKG_CRT_LINKAGE=
-        // static from vcpkg's base triplet, but vcpkg's own toolchain
-        // shim only converts that into CMAKE_MSVC_RUNTIME_LIBRARY *if it
-        // isn't already cached*. CMake's clang-cl support defaults to
-        // /MD before vcpkg's hook runs, so the cache ends up dynamic.
-        // Setting it here in the chainload pins it pre-CMake-detection.
-        "set(CMAKE_MSVC_RUNTIME_LIBRARY \"MultiThreaded$<$<CONFIG:Debug>:Debug>\" "
-            "CACHE STRING \"\")\n"
+        // We target the MinGW ABI on Windows now; no CMAKE_MSVC_RUNTIME_LIBRARY
+        // pinning needed. Force GNU-style linker flags via fuse-ld=lld so
+        // CMake's MinGW driver picks ld.lld instead of the system's GNU ld
+        // (which probably isn't installed).
+        "foreach(_v EXE SHARED MODULE)\n"
+        "    set(CMAKE_${{_v}}_LINKER_FLAGS_INIT \"-fuse-ld=lld\")\n"
+        "endforeach()\n"
 #endif
         "if(APPLE AND NOT CMAKE_OSX_SYSROOT)\n"
         "    execute_process(COMMAND xcrun --show-sdk-path\n"

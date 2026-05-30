@@ -25,103 +25,17 @@ $Arch = switch ($env:PROCESSOR_ARCHITECTURE) {
 
 $Triple = "windows-$Arch"
 
-# --- Visual Studio Build Tools detection (cargo-style) -----------------------
+# --- Windows toolchain prerequisite: none ------------------------------------
 #
-# Rivet ships its own clang-cl + lld-link, but Microsoft's licence forbids
-# redistributing the Windows SDK (kernel32.lib, the UCRT, windows.h). Cargo
-# hits the same wall -- `rustup-init.exe` prompts and installs Build Tools
-# via the same winget workload below. We do the equivalent.
+# Rivet ships llvm-mingw on Windows (LLVM + MinGW-w64 + libc++, built
+# together by Martin Storsjo). MinGW carries the Windows headers and
+# import libs we need, so unlike clang-cl / lld-link this works on a
+# fresh Windows install with no Visual Studio Build Tools, no Windows
+# SDK install, no winget workload prompt. Same approach Zig uses.
 #
-# Detection order: vswhere (the official MS tool, installed with VS 2017+),
-# then a registry sniff for the legacy Build Tools, then the env-var
-# fallback used by vcvarsall / msvc-dev-cmd. Set $env:RIVET_SKIP_VS_CHECK=1
-# to bypass entirely (corporate / portable / custom toolchain setups).
-
-function Test-VSBuildToolsInstalled {
-    if ($env:RIVET_SKIP_VS_CHECK -eq "1") { return $true }
-
-    # vswhere -- installed with any VS 2017+ at a stable known path.
-    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-    if (Test-Path $vswhere) {
-        $found = & $vswhere -products * `
-            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-            -property installationPath 2>$null
-        if ($LASTEXITCODE -eq 0 -and $found) { return $true }
-    }
-
-    # vcvars-set env (Developer Command Prompt / ilammy/msvc-dev-cmd / CI).
-    if ($env:INCLUDE -and $env:LIB -and ($env:INCLUDE -match 'Windows Kits')) {
-        return $true
-    }
-
-    return $false
-}
-
-function Install-VSBuildTools {
-    Write-Host ""
-    Write-Host "Visual Studio Build Tools 2022 not detected." -ForegroundColor Yellow
-    Write-Host "Rivet ships its own clang-cl + lld-link, but Windows links" -ForegroundColor Yellow
-    Write-Host "against Microsoft's SDK (windows.h, kernel32.lib, the UCRT)" -ForegroundColor Yellow
-    Write-Host "which Microsoft doesn't allow us to redistribute. Same prereq" -ForegroundColor Yellow
-    Write-Host "rustup/cargo and every other C++ tool needs on Windows." -ForegroundColor Yellow
-    Write-Host ""
-
-    # Try winget first; if absent, give the user a manual hint.
-    $winget = Get-Command winget -ErrorAction SilentlyContinue
-    if (-not $winget) {
-        Write-Host "winget not available. Install Build Tools manually from:" -ForegroundColor Yellow
-        Write-Host "  https://aka.ms/vs/17/release/vs_BuildTools.exe" -ForegroundColor Yellow
-        Write-Host "Then re-run this installer." -ForegroundColor Yellow
-        throw "Visual Studio Build Tools required."
-    }
-
-    $auto   = ($env:RIVET_AUTO_INSTALL_VS -eq "1")
-    $proceed = $auto
-    if (-not $auto) {
-        # If running non-interactively (piped from iex without a TTY) we
-        # can't prompt -- bail with instructions instead of hanging.
-        $isInteractive = [Environment]::UserInteractive -and
-                         -not ([Console]::IsInputRedirected)
-        if ($isInteractive) {
-            $ans = Read-Host "Install via winget now? [Y/n]"
-            $proceed = ($ans -eq "" -or $ans -ieq "y" -or $ans -ieq "yes")
-        } else {
-            # Single-quoted here-string: no variable expansion, no
-            # backtick-escape gymnastics -- works identically on PS 5.1
-            # and PS 7. The earlier double-quoted form mixed `$ and `"
-            # escapes and tripped PS 5.1's tokenizer in some envs.
-            $hint = @'
-Re-run with $env:RIVET_AUTO_INSTALL_VS=1 to install automatically, or run:
-  winget install --id Microsoft.VisualStudio.2022.BuildTools `
-    --override "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-'@
-            Write-Host $hint -ForegroundColor Yellow
-            throw "Visual Studio Build Tools required (non-interactive)."
-        }
-    }
-
-    if (-not $proceed) {
-        throw "Build Tools install declined. Re-run after installing manually."
-    }
-
-    Write-Host "Installing Microsoft.VisualStudio.2022.BuildTools via winget ..."
-    Write-Host "(this is ~6 GB and may take several minutes)"
-    & winget install --id Microsoft.VisualStudio.2022.BuildTools `
-        --override "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended" `
-        --accept-source-agreements --accept-package-agreements
-    if ($LASTEXITCODE -ne 0) {
-        throw "winget install failed (exit $LASTEXITCODE). Install manually from https://aka.ms/vs/17/release/vs_BuildTools.exe"
-    }
-
-    Write-Host ""
-    Write-Host "Visual Studio Build Tools installed." -ForegroundColor Green
-    Write-Host "You may need to open a new 'x64 Native Tools Command Prompt for VS 2022'" -ForegroundColor Yellow
-    Write-Host "(or restart your shell) before INCLUDE/LIB/PATH are populated." -ForegroundColor Yellow
-}
-
-if (-not (Test-VSBuildToolsInstalled)) {
-    Install-VSBuildTools
-}
+# This block used to be a ~100-line cargo-style detect-and-install
+# pipeline (vswhere lookup, INCLUDE/LIB probe, winget VCTools install).
+# All of it is gone now that the bundled toolchain is self-contained.
 
 # --- Version resolution -------------------------------------------------------
 

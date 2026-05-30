@@ -28,21 +28,9 @@ std::string make_toolchain_text(const toolchain::ToolchainInfo& tc,
         "# need to change anything here; this file is overwritten on every\n"
         "# `rivet build`.\n\n";
 
-#if defined(_WIN32)
-    text += std::format(
-        "set(CMAKE_C_COMPILER       \"{}\" CACHE FILEPATH \"\")\n"
-        "set(CMAKE_CXX_COMPILER     \"{}\" CACHE FILEPATH \"\")\n"
-        "set(CMAKE_AR               \"{}\" CACHE FILEPATH \"\")\n"
-        "set(CMAKE_LINKER           \"{}\" CACHE FILEPATH \"\")\n"
-        "set(CMAKE_RC_COMPILER      \"{}\" CACHE FILEPATH \"\")\n"
-        "set(CMAKE_MT               \"{}\" CACHE FILEPATH \"\")\n"
-        "set(CMAKE_MSVC_RUNTIME_LIBRARY \"MultiThreaded$<$<CONFIG:Debug>:Debug>\" "
-            "CACHE STRING \"\")\n",
-        path(tc.clang_cl()), path(tc.clang_cl()),
-        path(tc.llvm_lib()), path(tc.lld_link()),
-        path(tc.root / "bin" / "llvm-rc.exe"),
-        path(tc.root / "bin" / "llvm-mt.exe"));
-#else
+    // Uniform across platforms: rivet ships llvm-mingw on Windows, so the
+    // same clang / clang++ / ld.lld / llvm-ar driver triple works there
+    // too. No clang-cl, no MSVC runtime pinning, no llvm-lib.
     text += std::format(
         "set(CMAKE_C_COMPILER   \"{}\" CACHE FILEPATH \"\")\n"
         "set(CMAKE_CXX_COMPILER \"{}\" CACHE FILEPATH \"\")\n"
@@ -51,6 +39,14 @@ std::string make_toolchain_text(const toolchain::ToolchainInfo& tc,
         "set(CMAKE_LINKER       \"{}\" CACHE FILEPATH \"\")\n",
         path(tc.clang()), path(tc.clangpp()),
         path(tc.llvm_ar()), path(tc.llvm_ranlib()), path(tc.lld()));
+#if defined(_WIN32)
+    // RC / MT for CMake projects that touch enable_language(RC) — even
+    // MinGW-targeted ports occasionally do (winres, embedded manifests).
+    text += std::format(
+        "set(CMAKE_RC_COMPILER  \"{}\" CACHE FILEPATH \"\")\n"
+        "set(CMAKE_MT           \"{}\" CACHE FILEPATH \"\")\n",
+        path(tc.root / "bin" / "llvm-rc.exe"),
+        path(tc.root / "bin" / "llvm-mt.exe"));
 #endif
 
     text +=

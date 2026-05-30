@@ -127,22 +127,20 @@ Result<build::CompileCommand> make_compile_command(const CompileJob& job,
     }
 #endif
 
+    // Target triple. On Windows, force the MinGW target if the caller
+    // didn't supply one — bundled llvm-mingw is configured for the GNU
+    // ABI and silently picks msvc otherwise.
 #if defined(_WIN32)
-    // Match vcpkg's x64-windows-static-rivet triplet (static CRT).
-    // Without this, clang++ defaults to /MD (dynamic CRT) and lld-link
-    // refuses to mix CRT-linked archives with the rest of the link line:
-    //   lld-link: error: /failifmismatch: mismatch detected for 'RuntimeLibrary'
-    // Use the release static CRT even for debug profiles — vcpkg installs
-    // release-CRT archives under lib/ and debug-CRT ones under debug/lib/
-    // which we don't yet wire up separately. Release CRT + -g compile flags
-    // is the cargo-on-Windows default and works fine.
-    args.push_back("-fms-runtime-lib=static");
-#endif
-
-    // Target triple.
+    if (job.target_triple.empty()) {
+        args.push_back("--target=x86_64-w64-mingw32");
+    } else {
+        args.push_back("--target=" + job.target_triple);
+    }
+#else
     if (!job.target_triple.empty()) {
         args.push_back("--target=" + job.target_triple);
     }
+#endif
 
     // Sanitizers.
     if (!job.sanitizers.empty()) {
@@ -207,11 +205,14 @@ Result<build::CompileCommand> make_link_command(const LinkJob& job,
     }
 #endif
 #if defined(_WIN32)
-    // Match the static CRT we compile against (see make_compile_command).
-    // Drives lld-link to pull in libcmt.lib / libucrt.lib rather than the
-    // /MD msvcrt.lib import-libs that would otherwise mismatch vcpkg's
-    // x64-windows-static archives.
-    args.push_back("-fms-runtime-lib=static");
+    // MinGW ABI: target triple + GNU-style static link of the C++ runtime
+    // libs (libc++.a, libunwind.a, the mingw CRT). Without the target
+    // override, llvm-mingw's clang defaults to msvc.
+    if (job.target_triple.empty()) {
+        args.push_back("--target=x86_64-w64-mingw32");
+    }
+    args.push_back("-static-libstdc++");
+    args.push_back("-static-libgcc");
 #endif
 
     // Sanitizers.

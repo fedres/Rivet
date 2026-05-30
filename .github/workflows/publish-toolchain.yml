@@ -24,6 +24,10 @@ on:
         description: 'Strip docs/static-libs to shrink the bundle'
         required: false
         default: 'true'
+      mingw_tag:
+        description: 'llvm-mingw release tag matching the LLVM version (Windows bundle source). See https://github.com/mstorsjo/llvm-mingw/releases for the LLVM-version → date mapping.'
+        required: false
+        default: '20250114'   # LLVM 19.1.7 — see https://github.com/mstorsjo/llvm-mingw/releases/tag/20250114
 
 permissions:
   contents: write
@@ -44,12 +48,22 @@ jobs:
             pattern:  '^(LLVM-VERSION-Linux-ARM64|clang\+llvm-VERSION-(arm64|aarch64)-linux-gnu)\.tar\.xz$'
           - target:   arm64-apple-macos
             pattern:  '^(LLVM-VERSION-macOS-ARM64|clang\+llvm-VERSION-arm64-apple-macos[0-9]*)\.tar\.xz$'
-          - target:   x86_64-windows-msvc
-            pattern:  '^(LLVM-VERSION-Windows-X64|clang\+llvm-VERSION-x86_64-pc-windows-msvc)\.tar\.xz$'
+          # Windows: ship llvm-mingw (LLVM + MinGW-w64 + libc++, all built
+          # together by Martin Storsjo). MinGW provides the Windows headers
+          # and import libs we need, replacing the MSVC SDK / VS Build Tools
+          # prerequisite. Same approach Zig uses. The `mingw_tag` workflow
+          # input picks the llvm-mingw release whose embedded LLVM matches
+          # `llvm_version`. `source:llvm-mingw` flags this row so the
+          # download step takes the llvm-mingw URL path instead of the
+          # upstream LLVM release pattern.
+          - target:   x86_64-windows-gnu
+            source:   llvm-mingw
+            archive:  zip
+            pattern:  'llvm-mingw-MINGWTAG-ucrt-x86_64\.zip'
 
     steps:
       - name: Install tools
-        run: sudo apt-get update -q && sudo apt-get install -y --no-install-recommends zstd xz-utils jq
+        run: sudo apt-get update -q && sudo apt-get install -y --no-install-recommends zstd xz-utils jq unzip
 
       - name: Resolve and download upstream asset
         id: dl
@@ -58,46 +72,120 @@ jobs:
         run: |
           set -eu
           VER="${{ inputs.llvm_version }}"
-          PATTERN="$(echo '${{ matrix.pattern }}' | sed "s/VERSION/$VER/g")"
-          echo "Pattern for ${{ matrix.target }}: $PATTERN"
+          MINGW_TAG="${{ inputs.mingw_tag }}"
+          SOURCE="${{ matrix.source }}"
+          ARCHIVE="${{ matrix.archive }}"
+          [ -z "$ARCHIVE" ] && ARCHIVE="tar.xz"
 
-          # Pull asset names from the upstream release.
-          ASSETS_JSON="$(gh api "repos/llvm/llvm-project/releases/tags/llvmorg-$VER" --jq '.assets[].name' || echo "")"
+          if [ "$SOURCE" = "llvm-mingw" ]; then
+            # Windows path: pull from llvm-mingw upstream tag instead.
+            PATTERN="$(echo '${{ matrix.pattern }}' | sed "s/MINGWTAG/$MINGW_TAG/g")"
+            UPSTREAM_TAG="$MINGW_TAG"
+            UPSTREAM_REPO="mstorsjo/llvm-mingw"
+          else
+            # Linux / macOS path: upstream LLVM release.
+            PATTERN="$(echo '${{ matrix.pattern }}' | sed "s/VERSION/$VER/g")"
+            UPSTREAM_TAG="llvmorg-$VER"
+            UPSTREAM_REPO="llvm/llvm-project"
+          fi
+          echo "Pattern for ${{ matrix.target }}: $PATTERN"
+          echo "Upstream: $UPSTREAM_REPO @ $UPSTREAM_TAG (archive=$ARCHIVE)"
+
+          ASSETS_JSON="$(gh api "repos/$UPSTREAM_REPO/releases/tags/$UPSTREAM_TAG" --jq '.assets[].name' || echo "")"
           if [ -z "$ASSETS_JSON" ]; then
-            echo "::error::Cannot fetch upstream LLVM release llvmorg-$VER"
+            echo "::error::Cannot fetch $UPSTREAM_REPO release $UPSTREAM_TAG"
             echo "have_bundle=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           MATCH="$(echo "$ASSETS_JSON" | grep -E "$PATTERN" | head -n1 || true)"
           if [ -z "$MATCH" ]; then
-            echo "::warning::No upstream asset matches '$PATTERN' for LLVM $VER — skipping."
+            echo "::warning::No upstream asset matches '$PATTERN' for $UPSTREAM_TAG -- skipping."
             echo "Available assets:"
             echo "$ASSETS_JSON" | sed 's/^/    /'
             echo "have_bundle=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-$VER/$MATCH"
+          URL="https://github.com/$UPSTREAM_REPO/releases/download/$UPSTREAM_TAG/$MATCH"
+          OUTFILE="llvm.$ARCHIVE"
           echo "Downloading: $URL"
-          curl -fSL --progress-bar -o llvm.tar.xz "$URL"
-          ls -lh llvm.tar.xz
+          curl -fSL --progress-bar -o "$OUTFILE" "$URL"
+          ls -lh "$OUTFILE"
           echo "have_bundle=true" >> "$GITHUB_OUTPUT"
+          echo "archive=$ARCHIVE"  >> "$GITHUB_OUTPUT"
 
       - name: Extract
         if: steps.dl.outputs.have_bundle == 'true'
         run: |
           set -eu
           mkdir -p extract
-          tar -xJf llvm.tar.xz -C extract --strip-components=1
+          case "${{ steps.dl.outputs.archive }}" in
+            zip)
+              # llvm-mingw .zip wraps everything under llvm-mingw-<tag>-... — strip
+              # via a temp dir + move, since unzip lacks --strip-components.
+              mkdir -p _unzip
+              unzip -q llvm.zip -d _unzip
+              # The single top-level dir inside the zip becomes our extract root.
+              INNER="$(ls _unzip | head -n1)"
+              mv "_unzip/$INNER"/* extract/
+              # Some llvm-mingw zips include hidden files at the root too.
+              shopt -s dotglob nullglob
+              mv "_unzip/$INNER"/* extract/ 2>/dev/null || true
+              shopt -u dotglob nullglob
+              rm -rf _unzip
+              ;;
+            tar.xz|*)
+              tar -xJf llvm.tar.xz -C extract --strip-components=1
+              ;;
+          esac
           du -sh extract
 
       - name: Strip unused (optional)
         if: steps.dl.outputs.have_bundle == 'true' && inputs.strip_unused == 'true'
         run: |
           set -eu
+
+          # ── Ninja bundle (shared across all targets) ───────────────────
+          # Ninja is a single ~500 KB statically-linked binary that cmake
+          # uses as its build executor. Including it in the toolchain
+          # bundle means rivet's CMake-interception path (`rivet build` on
+          # a project with CMakeLists.txt but no rivet.toml) doesn't need
+          # to shell out to a host ninja that may not be installed.
+          NINJA_VERSION=1.12.1
+          case "${{ matrix.target }}" in
+            x86_64-linux-gnu)        NINJA_ASSET=ninja-linux.zip         ; NINJA_BIN=ninja      ;;
+            arm64-linux-gnu)         NINJA_ASSET=ninja-linux-aarch64.zip ; NINJA_BIN=ninja      ;;
+            arm64-apple-macos)       NINJA_ASSET=ninja-mac.zip           ; NINJA_BIN=ninja      ;;
+            x86_64-windows-gnu)      NINJA_ASSET=ninja-win.zip           ; NINJA_BIN=ninja.exe  ;;
+            *) NINJA_ASSET= ;;
+          esac
+
+          if [ "${{ matrix.source }}" = "llvm-mingw" ]; then
+            # llvm-mingw layout differs from upstream LLVM: it places the
+            # Windows sysroot under `x86_64-w64-mingw32/` and the C++
+            # headers under both `include/c++` and the sysroot. Stripping
+            # by tool list (like the LLVM bundle below) risks dropping the
+            # sysroot files clang needs to find windows.h. For the first
+            # cut, keep the whole bundle as-shipped and just add ninja.
+            # The compressed asset is ~150 MB → ~600 MB unpacked; we can
+            # tighten later if size becomes an issue.
+            if [ -n "$NINJA_ASSET" ]; then
+              NINJA_URL="https://github.com/ninja-build/ninja/releases/download/v${NINJA_VERSION}/${NINJA_ASSET}"
+              curl -fsSL -o ninja.zip "$NINJA_URL"
+              unzip -j ninja.zip "$NINJA_BIN" -d extract/bin/
+              chmod +x "extract/bin/$NINJA_BIN" || true
+              rm ninja.zip
+            fi
+            du -sh extract
+            ls extract/bin | head -20
+            exit 0
+          fi
+
+          # Upstream LLVM layout (Linux/Mac): aggressive strip — keep just
+          # the binaries Rivet uses, the libc++ headers, and the clang
+          # resource dir.
           mkdir -p keep/bin
-          # Keep the binaries Rivet's build engine actually uses.
           # Glob for "$tool*" so both "clang" (POSIX) and "clang.exe" (Windows)
           # are picked up. Excludes the static analyzer / sanitizer libs which
           # we don't need at install time.
@@ -116,27 +204,8 @@ jobs:
               [ -e "$f" ] && cp -aL "$f" "keep/bin/" || true
             done
           done
-          # Windows distributes its DLL runtime in bin/ — grab everything there.
-          for dll in extract/bin/*.dll; do
-            [ -e "$dll" ] && cp -a "$dll" keep/bin/ || true
-          done
-          # ── Bundle ninja (M2 prereq for the CMake-driving path) ────────
-          # Ninja is a single ~500 KB statically-linked binary that cmake
-          # uses as its build executor. Including it in the toolchain
-          # bundle means rivet's CMake-interception path (`rivet build` on
-          # a project with CMakeLists.txt but no rivet.toml) doesn't need
-          # to shell out to a host ninja that may not be installed.
-          NINJA_VERSION=1.12.1
-          case "${{ matrix.target }}" in
-            x86_64-linux-gnu)        NINJA_ASSET=ninja-linux.zip       ; NINJA_BIN=ninja      ;;
-            arm64-linux-gnu)         NINJA_ASSET=ninja-linux-aarch64.zip ; NINJA_BIN=ninja      ;;
-            arm64-apple-macos)       NINJA_ASSET=ninja-mac.zip         ; NINJA_BIN=ninja      ;;
-            x86_64-windows-msvc)     NINJA_ASSET=ninja-win.zip         ; NINJA_BIN=ninja.exe  ;;
-            *) NINJA_ASSET= ;;
-          esac
           if [ -n "$NINJA_ASSET" ]; then
             NINJA_URL="https://github.com/ninja-build/ninja/releases/download/v${NINJA_VERSION}/${NINJA_ASSET}"
-            echo "Downloading ninja: $NINJA_URL"
             curl -fsSL -o ninja.zip "$NINJA_URL"
             unzip -j ninja.zip "$NINJA_BIN" -d keep/bin/
             chmod +x "keep/bin/$NINJA_BIN" || true
@@ -153,9 +222,9 @@ jobs:
               [ -e "$f" ] && cp -a "$f" keep/lib/ || true
             done
           done
-          # Sanity check — bail if we ended up with nothing executable.
+          # Sanity check -- bail if we ended up with nothing executable.
           if [ -z "$(ls -A keep/bin 2>/dev/null)" ]; then
-            echo "::error::Strip step removed all binaries — fix the tool list above."
+            echo "::error::Strip step removed all binaries -- fix the tool list above."
             exit 1
           fi
           du -sh keep
@@ -238,7 +307,13 @@ jobs:
             | Linux x86_64            | `rivet-toolchain-clang-${{ inputs.llvm_version }}-x86_64-linux-gnu.tar.zst` |
             | Linux arm64             | `rivet-toolchain-clang-${{ inputs.llvm_version }}-arm64-linux-gnu.tar.zst` |
             | macOS arm64             | `rivet-toolchain-clang-${{ inputs.llvm_version }}-arm64-apple-macos.tar.zst` |
-            | Windows x86_64          | `rivet-toolchain-clang-${{ inputs.llvm_version }}-x86_64-windows-msvc.tar.zst` |
+            | Windows x86_64 (MinGW)  | `rivet-toolchain-clang-${{ inputs.llvm_version }}-x86_64-windows-gnu.tar.zst` |
 
-            *(Missing rows mean upstream didn't ship that target for this version —
+            *(Missing rows mean upstream didn't ship that target for this version --
             check the workflow logs.)*
+
+            **Windows is shipped as llvm-mingw** (LLVM + MinGW-w64 + libc++,
+            built together by Martin Storsjo,
+            https://github.com/mstorsjo/llvm-mingw). MinGW provides the
+            Windows headers and import libs we need, replacing the MSVC SDK
+            / VS Build Tools prerequisite. Same approach Zig uses.
