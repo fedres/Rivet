@@ -55,6 +55,18 @@ std::string make_toolchain_text(const toolchain::ToolchainInfo& tc,
         "endforeach()\n";
 
     text +=
+        "if(WIN32)\n"
+        "    # llvm-mingw defaults to dynamic libc++.dll / libunwind.dll, which\n"
+        "    # would force every cmake-driven binary to ship those DLLs next to\n"
+        "    # the exe. Static-link the C++ runtime + libgcc + winpthread so the\n"
+        "    # binary is self-contained -- matches the rivet-native compile.cpp\n"
+        "    # path which uses -static-libstdc++ / -static-libgcc.\n"
+        "    foreach(_v EXE SHARED MODULE)\n"
+        "        string(APPEND CMAKE_${_v}_LINKER_FLAGS_INIT \" -static\")\n"
+        "    endforeach()\n"
+        "endif()\n";
+
+    text +=
         "if(APPLE AND NOT CMAKE_OSX_SYSROOT)\n"
         "    execute_process(COMMAND xcrun --show-sdk-path\n"
         "                    OUTPUT_VARIABLE _rivet_sdk_path\n"
