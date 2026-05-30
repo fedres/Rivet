@@ -23,25 +23,16 @@ rivet --version
 
 ### Platform prereqs
 
-Rivet ships its own clang and libc++. It cannot ship Apple's frameworks or
-Microsoft's Windows SDK — those are licensed and we'd violate the EULA.
-Same prereq as cargo, zig, brew, every C++ tool:
+Rivet ships its own clang and libc++. It cannot ship Apple's frameworks
+(licensed). On Windows it bundles llvm-mingw, which carries the Windows
+SDK pieces it needs — same approach Zig uses — so the install is
+hermetic out of the box.
 
 | Platform | Prereq | How |
 |---|---|---|
 | **Linux** | none | glibc + kernel headers come with every distro |
 | **macOS** | Xcode Command Line Tools | `xcode-select --install` (one-time, ~1 GB) |
-| **Windows** | Visual Studio Build Tools 2022 | the installer offers a `winget install` flow |
-
-On Windows, `install.ps1` calls `vswhere` to detect existing VS installs;
-if none found it offers to run
-
-```powershell
-winget install --id Microsoft.VisualStudio.2022.BuildTools `
-  --override "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-```
-
-Set `$env:RIVET_AUTO_INSTALL_VS=1` to skip the prompt.
+| **Windows** | none | rivet ships llvm-mingw (LLVM + MinGW-w64 + libc++) — no Build Tools required |
 
 ## 2. Install a toolchain
 

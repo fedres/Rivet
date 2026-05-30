@@ -124,7 +124,6 @@ Print the top-level help or per-command help.
 | `RIVET_TOOLCHAIN_BASE_URL` | private mirror for LLVM bundles |
 | `RIVET_LLVM_VERSION` | default LLVM version for `install.sh` |
 | `RIVET_SKIP_TOOLCHAIN` | skip auto-toolchain in `install.sh` |
-| `RIVET_SKIP_SDK_CHECK` | (Windows) bypass VS Build Tools probe |
-| `RIVET_AUTO_INSTALL_VS` | (Windows) auto-approve winget install |
+| `RIVET_TARGET_DIR` | redirect build output (cargo CARGO_TARGET_DIR analog) |
 | `RIVET_REGISTRY_TOKEN` | auth for `rivet publish` |
 | `RIVET_REGISTRY_URL` | custom registry base |

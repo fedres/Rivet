@@ -21,7 +21,7 @@
             label: "windows",
             command: `<span class="prompt">PS&gt;</span> irm <span class="url">${BASE}/install.ps1</span> | iex`,
             plain:  `irm ${BASE}/install.ps1 | iex`,
-            prereq: "the installer auto-detects + offers a winget install of <strong>Visual Studio Build Tools 2022</strong> (~6&nbsp;GB, one-time).",
+            prereq: "<strong>no prereq</strong> &mdash; rivet ships llvm-mingw, so the Windows SDK / VS Build Tools install you'd normally need is already inside the bundle.",
         },
     };
 

@@ -13,10 +13,10 @@ curl -fsSL https://github.com/fedres/Rivet/releases/latest/download/install.sh |
 irm https://github.com/fedres/Rivet/releases/latest/download/install.ps1 | iex
 ```
 
-The installer puts `rivet` on `PATH`, drops the LLVM toolchain under
-`~/.rivet/toolchains/`, and (on Windows) auto-installs Visual Studio Build
-Tools via winget if you don't already have them. Restart your shell when
-it asks.
+The installer puts `rivet` on `PATH` and drops the LLVM toolchain under
+`~/.rivet/toolchains/`. Windows ships with llvm-mingw bundled — no Build
+Tools install, no winget prompt, no Windows SDK download. Restart your
+shell after install so the new `PATH` is picked up.
 
 ```bash
 rivet --version

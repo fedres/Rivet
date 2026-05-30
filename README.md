@@ -15,11 +15,12 @@ No prior compiler. No system package manager. No `apt install build-essential` /
 own libc++, fetches its own dependencies, builds them in a hermetic per-project
 tree, and produces a working binary.
 
-The single non-redistributable prereq is the platform SDK (Xcode on macOS,
-Visual Studio Build Tools on Windows). On Windows the installer auto-detects
-and offers a `winget install` of the Build Tools — same flow as `rustup-init`.
-On macOS it points you at `xcode-select --install`. Linux has no SDK to
-install: glibc + kernel headers come with every distro.
+The single non-redistributable prereq is the platform SDK on macOS (Xcode —
+the installer points you at `xcode-select --install`). Linux ships glibc +
+kernel headers with every distro. **Windows needs nothing** — rivet bundles
+llvm-mingw (LLVM + MinGW-w64 + libc++ all in one), so the install is
+hermetic without Visual Studio Build Tools or the Windows SDK. Same
+approach Zig uses.
 
 ---
 
@@ -113,8 +114,7 @@ that's rivet's own build manifest and showcases every feature.
 ## Architecture overview
 
 ```
-bootstrap/          One-line installer scripts (sh / ps1) with cargo-style
-                    VS Build Tools auto-detect on Windows.
+bootstrap/          One-line installer scripts (sh / ps1).
 platform/           Platform Abstraction Layer
   interface/        Pure C++ PAL API headers
   linux/  macos/  windows/   per-OS backends (fs, process, net, env, ...)
@@ -126,7 +126,8 @@ runtime/            Core runtime
   cli/              CLI dispatch (build, fetch, add, exec, ...)
   package/          Manifest parser, resolver, vcpkg/git/local sources
   toolchain/        Bundled-LLVM discovery + compile/link command builders
-                    + SDK detection (xcrun, VS Build Tools)
+                    + Apple SDK detection via xcrun. Windows is hermetic
+                    (llvm-mingw carries the SDK).
 vendor/             Pinned vendored C amalgamations (sqlite, libzstd)
 .github/workflows/  CI (ci.yml), nightly smoke (smoke.yml), publish + release
 ```
