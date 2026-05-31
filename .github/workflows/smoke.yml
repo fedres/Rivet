@@ -104,6 +104,43 @@ jobs:
           # without crashing.
           ./.rivet/build/debug/bin/rivet --version
 
+      # ── D2 acceptance: rivet builds a small project under sandbox ─────
+      # Proves the executor's auto-derived SandboxPolicy is permissive
+      # enough that a real build still succeeds. Linux + macOS only --
+      # the Windows sandbox is Job Object only (no path enforcement),
+      # so there's nothing distinct to gate on.
+      - name: D2 sandbox smoke (Unix)
+        if: runner.os != 'Windows'
+        continue-on-error: ${{ matrix.allow_failure }}
+        env:
+          RIVET_HOME:    ${{ runner.temp }}/rivet-d2-home
+          RIVET_SANDBOX: "1"
+        run: |
+          set -eux
+          mkdir -p "$RIVET_HOME"
+          DEMO="$(mktemp -d)/d2-demo"
+          mkdir -p "$DEMO/src"
+          cat > "$DEMO/rivet.toml" <<'TOML'
+          [package]
+          name = "d2demo"
+          version = "0.1.0"
+          TOML
+          cat > "$DEMO/src/main.cpp" <<'CPP'
+          #include <iostream>
+          int main() { std::cout << "sandbox ok\n"; return 0; }
+          CPP
+          cd "$DEMO"
+          "$GITHUB_WORKSPACE/build/release/rivet" toolchain install 19.1.7
+          # RIVET_SANDBOX=1 routes every Compile task through
+          # sandbox::spawn_sandboxed. If the auto-policy missed an
+          # input dir, the compile fails with EACCES and this step
+          # fails. That's the signal we want.
+          "$GITHUB_WORKSPACE/build/release/rivet" build
+          BIN=".rivet/build/debug/bin/d2demo"
+          test -x "$BIN"
+          OUT="$($BIN)"
+          test "$OUT" = "sandbox ok"
+
       - name: M1 self-build (rivet builds rivet, Windows)
         if: runner.os == 'Windows'
         continue-on-error: ${{ matrix.allow_failure }}
