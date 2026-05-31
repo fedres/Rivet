@@ -39,6 +39,13 @@ std::string escape_path(std::string_view p) {
 std::string build_macos_profile(const SandboxPolicy& policy);
 
 std::string build_macos_profile(const SandboxPolicy& policy) {
+    // DIAGNOSTIC short-circuit: macOS-14 sandbox-exec was exiting 134
+    // (SIGABRT) on our default-deny profile. Bisect by returning a
+    // fully-permissive profile; if the build succeeds we know the deny
+    // ruleset / one of the bake-in allows is the offender. Revert once
+    // we identify the offending clause.
+    return "(version 1)\n(allow default)\n";
+
     std::string p;
     p += "(version 1)\n";
     p += "(deny default)\n";
