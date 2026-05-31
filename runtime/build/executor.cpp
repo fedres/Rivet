@@ -9,7 +9,6 @@
 #include "../../platform/interface/fs.hpp"
 
 #include <algorithm>
-#include <cstdio>
 #include <format>
 #include <thread>
 #include <unordered_set>
@@ -237,13 +236,6 @@ TaskResult Executor::execute_task(const TaskNode& task) {
 
     auto child_r = [&]() {
         if (want_sandbox && rivet::sandbox::is_supported()) {
-            // DIAGNOSTIC: pass stdout/stderr through during D2 bring-up so
-            // sandbox-exec's profile-parse errors and policy denials show
-            // up in the CI log instead of being buried inside the per-task
-            // stderr buffer that the on_progress callback only prints on
-            // task failure (and even then sometimes interleaves badly).
-            opts.capture_stderr = false;
-            opts.capture_stdout = false;
             rivet::sandbox::SandboxPolicy policy;
             policy.allow_tmpdir = true;
             policy.network      = rivet::sandbox::NetworkPolicy::DenyAll;
@@ -255,7 +247,7 @@ TaskResult Executor::execute_task(const TaskNode& task) {
                 policy.path_rules.push_back({toolchain_root,
                     rivet::sandbox::PathRule::Access::ReadOnly, true});
             }
-            // System headers (no-op on macOS thanks to the baked profile).
+            // System headers / glibc on Linux.
             policy.path_rules.push_back({Path{"/usr"},
                 rivet::sandbox::PathRule::Access::ReadOnly, true});
 
@@ -271,21 +263,7 @@ TaskResult Executor::execute_task(const TaskNode& task) {
                 if (!d.empty()) policy.path_rules.push_back({d,
                     rivet::sandbox::PathRule::Access::ReadWrite, true});
             }
-            // DIAGNOSTIC: print the wrapped argv + policy summary so we
-            // can see exactly what's being spawned when CI fails.
-            std::fprintf(stderr, "[sandbox] exe=%s argv0=%s rules=%zu\n",
-                task.command->executable.c_str(),
-                opts.args.empty() ? "(none)" : opts.args[0].c_str(),
-                policy.path_rules.size());
-            std::fflush(stderr);
-            auto sb = rivet::sandbox::spawn_sandboxed(std::move(opts), std::move(policy));
-            if (!sb) {
-                std::fprintf(stderr,
-                    "[sandbox] spawn_sandboxed returned error: %s\n",
-                    sb.error().message.c_str());
-                std::fflush(stderr);
-            }
-            return sb;
+            return rivet::sandbox::spawn_sandboxed(std::move(opts), std::move(policy));
         }
         return rivet::process::spawn(std::move(opts));
     }();
@@ -300,11 +278,6 @@ TaskResult Executor::execute_task(const TaskNode& task) {
     auto  wait_r = child.wait();
     r.exit_code  = wait_r ? *wait_r : -1;
     r.success    = (r.exit_code == 0);
-    if (want_sandbox) {
-        std::fprintf(stderr, "[sandbox] child exited %d (wait_r=%s)\n",
-            r.exit_code, wait_r ? "ok" : wait_r.error().message.c_str());
-        std::fflush(stderr);
-    }
     r.elapsed    = rivet::time::elapsed(t_start);
     r.stdout_out = child.stdout_output();
     r.stderr_out = child.stderr_output();

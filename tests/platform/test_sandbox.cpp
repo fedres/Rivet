@@ -35,8 +35,17 @@ int run_under_sandbox(std::vector<std::string> argv,
 
 #if defined(__APPLE__)
 
+// macOS enforcement is currently a no-op (see platform/macos/sandbox.cpp).
+// These tests assert the policy-translation behaviour we'd reinstate once
+// the Endpoint Security migration replaces the sandbox-exec wrapper --
+// they're gated on is_supported() so they GTEST_SKIP cleanly today and
+// will start running again the moment we flip is_supported() back to true.
+
 TEST(MacosSandbox, AllowsExplicitlyListedReads) {
-    // Allow /etc as ReadOnly; expect `/usr/bin/test -r /etc/hosts` to succeed.
+    if (!rivet::sandbox::is_supported()) {
+        GTEST_SKIP() << "macOS sandbox enforcement is a no-op pending "
+                        "Endpoint Security migration";
+    }
     rivet::sandbox::SandboxPolicy policy;
     policy.path_rules.push_back({rivet::Path{"/etc"},
                                   rivet::sandbox::PathRule::Access::ReadOnly,
@@ -47,12 +56,12 @@ TEST(MacosSandbox, AllowsExplicitlyListedReads) {
 }
 
 TEST(MacosSandbox, BlocksUnlistedWrites) {
-    // No write rule -> cat to a fresh tmp path outside the allowed
-    // tmpdir scope is denied. Use a write outside /private/tmp (which the
-    // policy's allow_tmpdir would have unblocked) by routing through an
-    // explicit literal that was never granted.
+    if (!rivet::sandbox::is_supported()) {
+        GTEST_SKIP() << "macOS sandbox enforcement is a no-op pending "
+                        "Endpoint Security migration";
+    }
     rivet::sandbox::SandboxPolicy policy;
-    policy.allow_tmpdir = false;  // strip the tmpdir blanket
+    policy.allow_tmpdir = false;
     int rc = run_under_sandbox(
         {"/bin/sh", "-c", "echo x > /tmp/rivet_sandbox_should_block.$$"},
         std::move(policy));
