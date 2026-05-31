@@ -59,16 +59,19 @@ TEST(MacosSandbox, BlocksUnlistedWrites) {
     EXPECT_NE(rc, 0) << "without an allow rule, writing to /tmp should fail";
 }
 
+// Forward-declare the impl-internal builder inside its own namespace so the
+// linker resolves rivet::sandbox::build_macos_profile, not ::build_macos_profile.
+namespace rivet::sandbox {
+std::string build_macos_profile(const SandboxPolicy&);
+}
+
 TEST(MacosSandbox, ProfileBuilderHasDenyDefault) {
-    // Build the profile directly via the impl-internal builder to assert
-    // the "deny default" sentinel is there. Forward-declare since the
-    // symbol is internal to platform/macos/sandbox.cpp.
-    namespace rs = rivet::sandbox;
-    std::string build_macos_profile(const rs::SandboxPolicy&);
-    rs::SandboxPolicy p;
+    rivet::sandbox::SandboxPolicy p;
     p.path_rules.push_back(
-        {rivet::Path{"/tmp/allowed"}, rs::PathRule::Access::ReadWrite, true});
-    std::string text = build_macos_profile(p);
+        {rivet::Path{"/tmp/allowed"},
+         rivet::sandbox::PathRule::Access::ReadWrite,
+         true});
+    std::string text = rivet::sandbox::build_macos_profile(p);
 
     EXPECT_NE(text.find("(deny default)"),  std::string::npos);
     EXPECT_NE(text.find("/tmp/allowed"),    std::string::npos);
