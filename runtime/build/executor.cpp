@@ -300,6 +300,11 @@ TaskResult Executor::execute_task(const TaskNode& task) {
     auto  wait_r = child.wait();
     r.exit_code  = wait_r ? *wait_r : -1;
     r.success    = (r.exit_code == 0);
+    if (want_sandbox) {
+        std::fprintf(stderr, "[sandbox] child exited %d (wait_r=%s)\n",
+            r.exit_code, wait_r ? "ok" : wait_r.error().message.c_str());
+        std::fflush(stderr);
+    }
     r.elapsed    = rivet::time::elapsed(t_start);
     r.stdout_out = child.stdout_output();
     r.stderr_out = child.stderr_output();
