@@ -114,8 +114,12 @@ bool is_supported() {
     // VERSION flag returns the ABI integer (1+), or ENOSYS on a kernel
     // without Landlock. The probe is side-effect-free (no ruleset is
     // created) and very cheap.
-    constexpr uint32_t LANDLOCK_CREATE_RULESET_VERSION = 1U << 0;
-    long abi = landlock_create_ruleset(nullptr, 0, LANDLOCK_CREATE_RULESET_VERSION);
+    //
+    // Inline the flag value (1) rather than naming a constant -- the
+    // upstream <linux/landlock.h> defines LANDLOCK_CREATE_RULESET_VERSION
+    // as a macro, which would clash with a local constexpr of the same
+    // name on distros that ship the header (ubuntu-22.04, ubuntu-24.04).
+    long abi = landlock_create_ruleset(nullptr, 0, 1U);
     return abi >= 1;
 }
 
