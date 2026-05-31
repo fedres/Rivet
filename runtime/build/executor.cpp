@@ -3,6 +3,8 @@
 #include "dep_file.hpp"
 #include "../cache/key.hpp"
 #include "../../platform/interface/process.hpp"
+#include "../../platform/interface/sandbox.hpp"
+#include "../../platform/interface/env.hpp"
 #include "../../platform/interface/time.hpp"
 #include "../../platform/interface/fs.hpp"
 
@@ -221,7 +223,50 @@ TaskResult Executor::execute_task(const TaskNode& task) {
     argv.insert(argv.begin(), exe);
     opts.args = std::move(argv);
 
-    auto child_r = rivet::process::spawn(opts);
+    // ── D2: optionally route through the sandbox backend ────────────────
+    // RIVET_SANDBOX=1 enables hermetic compile sandboxing. The policy
+    // allows reads on the toolchain root, /usr (system headers on Linux),
+    // and every input file's parent dir, plus writes to every output dir
+    // and the TMPDIR blanket. Compile tasks only -- linker / archive
+    // tasks aren't gated yet.
+    auto sandbox_env = rivet::env::get("RIVET_SANDBOX");
+    bool want_sandbox = sandbox_env.has_value() && *sandbox_env == "1"
+                        && task.command
+                        && task.kind == TaskKind::Compile;
+
+    auto child_r = [&]() {
+        if (want_sandbox && rivet::sandbox::is_supported()) {
+            rivet::sandbox::SandboxPolicy policy;
+            policy.allow_tmpdir = true;
+            policy.network      = rivet::sandbox::NetworkPolicy::DenyAll;
+
+            // Toolchain root: parent of the exe's bin/ dir.
+            Path exe_path{task.command->executable};
+            Path toolchain_root = exe_path.parent_path().parent_path();
+            if (!toolchain_root.empty()) {
+                policy.path_rules.push_back({toolchain_root,
+                    rivet::sandbox::PathRule::Access::ReadOnly, true});
+            }
+            // System headers (no-op on macOS thanks to the baked profile).
+            policy.path_rules.push_back({Path{"/usr"},
+                rivet::sandbox::PathRule::Access::ReadOnly, true});
+
+            // Input parents (covers source dir + transitive header roots).
+            for (const auto& in : task.inputs) {
+                Path d = in.path.parent_path();
+                if (!d.empty()) policy.path_rules.push_back({d,
+                    rivet::sandbox::PathRule::Access::ReadOnly, true});
+            }
+            // Output parents.
+            for (const auto& out : task.outputs) {
+                Path d = out.path.parent_path();
+                if (!d.empty()) policy.path_rules.push_back({d,
+                    rivet::sandbox::PathRule::Access::ReadWrite, true});
+            }
+            return rivet::sandbox::spawn_sandboxed(std::move(opts), std::move(policy));
+        }
+        return rivet::process::spawn(std::move(opts));
+    }();
     if (!child_r) {
         r.success    = false;
         r.stderr_out = std::format("spawn failed: {}", child_r.error().message);
