@@ -236,6 +236,12 @@ TaskResult Executor::execute_task(const TaskNode& task) {
 
     auto child_r = [&]() {
         if (want_sandbox && rivet::sandbox::is_supported()) {
+            // DIAGNOSTIC: surface sandbox-exec's profile-parse errors and
+            // policy denials directly to rivet's stderr so they show up in
+            // CI logs. Without this the failures look like "0 compiled,
+            // 1 failed [0.0s]" with no clue what was actually denied.
+            // Remove or gate behind a flag once D2 stabilises.
+            opts.capture_stderr = false;
             rivet::sandbox::SandboxPolicy policy;
             policy.allow_tmpdir = true;
             policy.network      = rivet::sandbox::NetworkPolicy::DenyAll;
