@@ -11,6 +11,7 @@
 // headers (/usr, /System, /Library/Developer) are always allowed.
 #include "../interface/sandbox.hpp"
 
+#include <cstdio>
 #include <string>
 #include <utility>
 
@@ -125,13 +126,21 @@ bool is_supported() {
 
 rivet::Result<rivet::process::ChildProcess>
 spawn_sandboxed(rivet::process::SpawnOptions opts, SandboxPolicy policy) {
+    std::fprintf(stderr, "[sandbox/mac] enter, args.size=%zu rules=%zu\n",
+        opts.args.size(), policy.path_rules.size());
+    std::fflush(stderr);
+
     if (opts.args.empty()) {
+        std::fprintf(stderr, "[sandbox/mac] args empty -> fall-through spawn\n");
+        std::fflush(stderr);
         return rivet::process::spawn(std::move(opts));
     }
 
-    // Prepend sandbox-exec to the argv. The profile rides in-line via -p;
-    // argv max on macOS is 256 KB so the profile string fits comfortably.
     std::string profile = build_macos_profile(policy);
+    std::fprintf(stderr, "[sandbox/mac] profile built (len=%zu); first 200 chars:\n%.200s\n",
+        profile.size(), profile.c_str());
+    std::fflush(stderr);
+
     std::vector<std::string> wrapped = {
         "/usr/bin/sandbox-exec",
         "-p", std::move(profile),
@@ -139,7 +148,15 @@ spawn_sandboxed(rivet::process::SpawnOptions opts, SandboxPolicy policy) {
     for (auto& a : opts.args) wrapped.push_back(std::move(a));
     opts.args = std::move(wrapped);
 
-    return rivet::process::spawn(std::move(opts));
+    std::fprintf(stderr, "[sandbox/mac] calling process::spawn with wrapped argv (count=%zu)\n",
+        opts.args.size());
+    std::fflush(stderr);
+
+    auto r = rivet::process::spawn(std::move(opts));
+    std::fprintf(stderr, "[sandbox/mac] process::spawn returned %s\n",
+        r ? "ok" : r.error().message.c_str());
+    std::fflush(stderr);
+    return r;
 }
 
 } // namespace rivet::sandbox
