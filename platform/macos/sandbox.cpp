@@ -55,15 +55,20 @@ std::string build_macos_profile(const SandboxPolicy& policy) {
     // Common reads that every clang invocation needs: the macOS SDK + the
     // toolchain itself + libc++ headers + locale data. Allowing these by
     // default beats forcing every caller to enumerate them in PathRule.
+    //
+    // NOTE: `subpath` is for directories; `literal` is for single files.
+    // Earlier revisions tried (subpath "/private/etc/passwd") -- passwd
+    // is a regular file, so the whole profile was rejected by
+    // sandbox-exec at parse time and every Compile silently failed at 0s.
     p +=
         "(allow file-read*"
         " (subpath \"/usr\")"
         " (subpath \"/System\")"
         " (subpath \"/Library/Developer\")"
         " (subpath \"/Library/Apple\")"
-        " (subpath \"/private/etc/localtime\")"
         " (subpath \"/private/var/db/timezone\")"
-        " (subpath \"/private/etc/passwd\")"
+        " (literal \"/private/etc/localtime\")"
+        " (literal \"/private/etc/passwd\")"
         " (literal \"/dev/null\")"
         " (literal \"/dev/random\")"
         " (literal \"/dev/urandom\")"
