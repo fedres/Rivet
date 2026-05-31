@@ -110,7 +110,8 @@ public:
 
     ~ChildProcess();
 
-    [[nodiscard]] NativePid    pid()        const { return pid_; }
+    [[nodiscard]] NativePid    pid()           const { return pid_; }
+    [[nodiscard]] NativeHandle native_handle() const { return handle_; }
     [[nodiscard]] bool         is_running() const;
 
     // Block until process exits. Returns exit code.
