@@ -39,23 +39,18 @@ std::string escape_path(std::string_view p) {
 std::string build_macos_profile(const SandboxPolicy& policy);
 
 std::string build_macos_profile(const SandboxPolicy& policy) {
-    // DIAGNOSTIC: deny-default but allow ALL ops by category (no path
-    // filters). If this works, the bake-in path lists are the problem;
-    // if it still SIGABRTs, deny-default itself is unusable on macOS-14
-    // for our wrapped-binary case.
-    (void)policy;
-    return "(version 1)\n"
-           "(deny default)\n"
-           "(allow process*)\n"
-           "(allow file*)\n"
-           "(allow mach*)\n"
-           "(allow ipc*)\n"
-           "(allow network*)\n"
-           "(allow sysctl*)\n"
-           "(allow signal)\n"
-           "(allow iokit-open)\n"
-           "(allow system-fsctl)\n"
-           "(allow system-info)\n";
+    // One (allow ...) per filter -- macOS-14 sandbox-exec was SIGABRT'ing
+    // on the more compact multi-arg form. The unit tests don't trigger
+    // the abort because their profiles are tiny; the executor's policy is
+    // what tipped it over.
+    auto add_read = [](std::string& p, const char* scope, std::string_view path) {
+        p += "(allow file-read* (";
+        p += scope; p += " \""; p += path; p += "\"))\n";
+    };
+    auto add_rw = [](std::string& p, const char* scope, std::string_view path) {
+        p += "(allow file* (";
+        p += scope; p += " \""; p += path; p += "\"))\n";
+    };
 
     std::string p;
     p += "(version 1)\n";
@@ -68,69 +63,39 @@ std::string build_macos_profile(const SandboxPolicy& policy) {
     p += "(allow process-exec*)\n";
     p += "(allow signal (target self))\n";
     p += "(allow sysctl-read)\n";          // clang reads hw.* at startup
-    // mach-lookup without filters was rejected by macOS-14 sandbox-exec
-    // (SIGABRT during profile application). Allow only what dyld and the
-    // standard runtime actually need to call -- enumerated explicitly.
-    p += "(allow mach-lookup"
-         " (global-name \"com.apple.system.opendirectoryd.libinfo\")"
-         " (global-name \"com.apple.system.opendirectoryd.membership\")"
-         " (global-name \"com.apple.SecurityServer\")"
-         " (global-name \"com.apple.PowerManagement.control\")"
-         " (global-name \"com.apple.system.notification_center\")"
-         " (global-name \"com.apple.system.logger\")"
-         " (global-name \"com.apple.distributed_notifications@Uv3\")"
-         " (global-name \"com.apple.windowserver.active\")"
-         " (global-name \"com.apple.coreservices.launchservicesd\")"
-         ")\n";
+    p += "(allow mach-lookup)\n";          // dyld / system frameworks
+    p += "(allow iokit-open)\n";           // libuv, mach msg lookups
+    p += "(allow ipc-posix-shm)\n";        // POSIX shm for some clang paths
     p += "(allow file-read-metadata)\n";   // stat/lstat are everywhere
 
     // Common reads that every clang invocation needs: the macOS SDK + the
-    // toolchain itself + libc++ headers + locale data. Allowing these by
-    // default beats forcing every caller to enumerate them in PathRule.
-    //
-    // NOTE: `subpath` is for directories; `literal` is for single files.
-    // Earlier revisions tried (subpath "/private/etc/passwd") -- passwd
-    // is a regular file, so the whole profile was rejected by
-    // sandbox-exec at parse time and every Compile silently failed at 0s.
-    p +=
-        "(allow file-read*"
-        " (subpath \"/usr\")"
-        " (subpath \"/System\")"
-        " (subpath \"/Library/Developer\")"
-        " (subpath \"/Library/Apple\")"
-        " (subpath \"/private/var/db/timezone\")"
-        " (literal \"/private/etc/localtime\")"
-        " (literal \"/private/etc/passwd\")"
-        " (literal \"/dev/null\")"
-        " (literal \"/dev/random\")"
-        " (literal \"/dev/urandom\")"
-        ")\n";
+    // toolchain itself + libc++ headers + locale data.
+    add_read(p, "subpath",  "/usr");
+    add_read(p, "subpath",  "/System");
+    add_read(p, "subpath",  "/Library/Developer");
+    add_read(p, "subpath",  "/Library/Apple");
+    add_read(p, "subpath",  "/private/var/db/timezone");
+    add_read(p, "literal",  "/private/etc/localtime");
+    add_read(p, "literal",  "/private/etc/passwd");
+    add_read(p, "literal",  "/dev/null");
+    add_read(p, "literal",  "/dev/random");
+    add_read(p, "literal",  "/dev/urandom");
 
     if (policy.allow_tmpdir) {
-        // macOS gives every process a TMPDIR under /var/folders. clang puts
-        // its temp .o-prep files there; sandbox-exec sees the canonical
-        // path so /private prefixes both.
-        p += "(allow file*"
-             " (subpath \"/tmp\")"
-             " (subpath \"/private/tmp\")"
-             " (subpath \"/private/var/folders\")"
-             " (subpath \"/var/folders\")"
-             ")\n";
+        add_rw(p, "subpath", "/tmp");
+        add_rw(p, "subpath", "/private/tmp");
+        add_rw(p, "subpath", "/private/var/folders");
+        add_rw(p, "subpath", "/var/folders");
     }
 
     for (const auto& r : policy.path_rules) {
-        const char* op =
-            r.access == PathRule::Access::ReadOnly  ? "file-read*" :
-            r.access == PathRule::Access::ReadWrite ? "file*"      : nullptr;
-        if (!op) continue;
         const char* scope = r.recursive ? "subpath" : "literal";
-        p += "(allow ";
-        p += op;
-        p += " (";
-        p += scope;
-        p += " \"";
-        p += escape_path(r.path.string());
-        p += "\"))\n";
+        std::string esc = escape_path(r.path.string());
+        if (r.access == PathRule::Access::ReadOnly) {
+            add_read(p, scope, esc);
+        } else if (r.access == PathRule::Access::ReadWrite) {
+            add_rw(p, scope, esc);
+        }
     }
 
     switch (policy.network) {
@@ -138,8 +103,8 @@ std::string build_macos_profile(const SandboxPolicy& policy) {
             p += "(allow network*)\n";
             break;
         case NetworkPolicy::DenyOutbound:
-            // Allow loopback only; deny everything else.
-            p += "(allow network-bind network-inbound (local ip))\n";
+            p += "(allow network-bind (local ip))\n";
+            p += "(allow network-inbound (local ip))\n";
             p += "(allow network-outbound (remote ip \"localhost:*\"))\n";
             break;
         case NetworkPolicy::DenyAll:
