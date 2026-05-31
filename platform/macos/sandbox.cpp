@@ -39,13 +39,6 @@ std::string escape_path(std::string_view p) {
 std::string build_macos_profile(const SandboxPolicy& policy);
 
 std::string build_macos_profile(const SandboxPolicy& policy) {
-    // DIAGNOSTIC short-circuit: macOS-14 sandbox-exec was exiting 134
-    // (SIGABRT) on our default-deny profile. Bisect by returning a
-    // fully-permissive profile; if the build succeeds we know the deny
-    // ruleset / one of the bake-in allows is the offender. Revert once
-    // we identify the offending clause.
-    return "(version 1)\n(allow default)\n";
-
     std::string p;
     p += "(version 1)\n";
     p += "(deny default)\n";
@@ -57,7 +50,20 @@ std::string build_macos_profile(const SandboxPolicy& policy) {
     p += "(allow process-exec*)\n";
     p += "(allow signal (target self))\n";
     p += "(allow sysctl-read)\n";          // clang reads hw.* at startup
-    p += "(allow mach-lookup)\n";          // dyld / system frameworks
+    // mach-lookup without filters was rejected by macOS-14 sandbox-exec
+    // (SIGABRT during profile application). Allow only what dyld and the
+    // standard runtime actually need to call -- enumerated explicitly.
+    p += "(allow mach-lookup"
+         " (global-name \"com.apple.system.opendirectoryd.libinfo\")"
+         " (global-name \"com.apple.system.opendirectoryd.membership\")"
+         " (global-name \"com.apple.SecurityServer\")"
+         " (global-name \"com.apple.PowerManagement.control\")"
+         " (global-name \"com.apple.system.notification_center\")"
+         " (global-name \"com.apple.system.logger\")"
+         " (global-name \"com.apple.distributed_notifications@Uv3\")"
+         " (global-name \"com.apple.windowserver.active\")"
+         " (global-name \"com.apple.coreservices.launchservicesd\")"
+         ")\n";
     p += "(allow file-read-metadata)\n";   // stat/lstat are everywhere
 
     // Common reads that every clang invocation needs: the macOS SDK + the
