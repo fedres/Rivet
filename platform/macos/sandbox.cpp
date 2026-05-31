@@ -39,6 +39,24 @@ std::string escape_path(std::string_view p) {
 std::string build_macos_profile(const SandboxPolicy& policy);
 
 std::string build_macos_profile(const SandboxPolicy& policy) {
+    // DIAGNOSTIC: deny-default but allow ALL ops by category (no path
+    // filters). If this works, the bake-in path lists are the problem;
+    // if it still SIGABRTs, deny-default itself is unusable on macOS-14
+    // for our wrapped-binary case.
+    (void)policy;
+    return "(version 1)\n"
+           "(deny default)\n"
+           "(allow process*)\n"
+           "(allow file*)\n"
+           "(allow mach*)\n"
+           "(allow ipc*)\n"
+           "(allow network*)\n"
+           "(allow sysctl*)\n"
+           "(allow signal)\n"
+           "(allow iokit-open)\n"
+           "(allow system-fsctl)\n"
+           "(allow system-info)\n";
+
     std::string p;
     p += "(version 1)\n";
     p += "(deny default)\n";
