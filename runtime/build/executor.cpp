@@ -9,6 +9,7 @@
 #include "../../platform/interface/fs.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <format>
 #include <thread>
 #include <unordered_set>
@@ -236,12 +237,13 @@ TaskResult Executor::execute_task(const TaskNode& task) {
 
     auto child_r = [&]() {
         if (want_sandbox && rivet::sandbox::is_supported()) {
-            // DIAGNOSTIC: surface sandbox-exec's profile-parse errors and
-            // policy denials directly to rivet's stderr so they show up in
-            // CI logs. Without this the failures look like "0 compiled,
-            // 1 failed [0.0s]" with no clue what was actually denied.
-            // Remove or gate behind a flag once D2 stabilises.
+            // DIAGNOSTIC: pass stdout/stderr through during D2 bring-up so
+            // sandbox-exec's profile-parse errors and policy denials show
+            // up in the CI log instead of being buried inside the per-task
+            // stderr buffer that the on_progress callback only prints on
+            // task failure (and even then sometimes interleaves badly).
             opts.capture_stderr = false;
+            opts.capture_stdout = false;
             rivet::sandbox::SandboxPolicy policy;
             policy.allow_tmpdir = true;
             policy.network      = rivet::sandbox::NetworkPolicy::DenyAll;
@@ -269,7 +271,21 @@ TaskResult Executor::execute_task(const TaskNode& task) {
                 if (!d.empty()) policy.path_rules.push_back({d,
                     rivet::sandbox::PathRule::Access::ReadWrite, true});
             }
-            return rivet::sandbox::spawn_sandboxed(std::move(opts), std::move(policy));
+            // DIAGNOSTIC: print the wrapped argv + policy summary so we
+            // can see exactly what's being spawned when CI fails.
+            std::fprintf(stderr, "[sandbox] exe=%s argv0=%s rules=%zu\n",
+                task.command->executable.c_str(),
+                opts.args.empty() ? "(none)" : opts.args[0].c_str(),
+                policy.path_rules.size());
+            std::fflush(stderr);
+            auto sb = rivet::sandbox::spawn_sandboxed(std::move(opts), std::move(policy));
+            if (!sb) {
+                std::fprintf(stderr,
+                    "[sandbox] spawn_sandboxed returned error: %s\n",
+                    sb.error().message.c_str());
+                std::fflush(stderr);
+            }
+            return sb;
         }
         return rivet::process::spawn(std::move(opts));
     }();
