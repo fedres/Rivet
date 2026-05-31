@@ -68,6 +68,16 @@ struct SpawnOptions {
 
     // Cancellation token. Process is killed if token is cancelled.
     std::optional<CancellationToken> cancel_token;
+
+    // Optional hook executed in the child between fork() and execve(), used
+    // by sandbox::spawn_sandboxed to install Landlock rules on Linux. Must
+    // be async-signal-safe (no malloc, no locks, no std::ostream). Return
+    // 0 to proceed; any non-zero value aborts the child with _exit(errno).
+    //
+    // Currently honoured on Linux only -- macOS sandbox-exec wraps the
+    // argv outside the child and doesn't need a pre-exec step; Windows
+    // sandbox sets up Job Objects in the parent before CreateProcess.
+    std::function<int()> pre_exec_hook;
 };
 
 // ─── Async output reader ─────────────────────────────────────────────────────

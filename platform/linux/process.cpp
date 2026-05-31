@@ -251,6 +251,17 @@ Result<ChildProcess> spawn(SpawnOptions opts) {
         }
         ::setpgid(0, 0);
         if (opts.working_dir) ::chdir(opts.working_dir->c_str());
+
+        // D2: per-child Landlock restriction is installed here, after
+        // setpgid + chdir so the child still has access to its CWD but
+        // before execve so the new image inherits the restricted ruleset.
+        // The hook is required to be async-signal-safe -- no malloc, no
+        // C++ object construction. See sandbox.hpp.
+        if (opts.pre_exec_hook) {
+            int rc = opts.pre_exec_hook();
+            if (rc != 0) ::_exit(rc < 0 ? 126 : rc);
+        }
+
         ::execve(resolved_exe.c_str(), argv.data(), envp.data());
         ::_exit(127);
     }

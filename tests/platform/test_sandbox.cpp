@@ -80,6 +80,75 @@ TEST(MacosSandbox, ProfileBuilderHasDenyDefault) {
 
 #endif  // __APPLE__
 
+#if defined(__linux__)
+
+TEST(LinuxSandbox, IsSupportedReturnsBoolWithoutCrashing) {
+    // Probe shouldn't crash regardless of kernel version. On runners with
+    // Landlock (5.13+) returns true; on older runners returns false.
+    bool s = rivet::sandbox::is_supported();
+    (void)s;
+}
+
+TEST(LinuxSandbox, ReadOnlyRuleBlocksWriteToSamePath) {
+    if (!rivet::sandbox::is_supported()) {
+        GTEST_SKIP() << "Landlock not available on this kernel";
+    }
+    // Allow /tmp ReadOnly. Spawn `sh -c 'echo hi > /tmp/rivet_lock_test.$$'`.
+    // The write should fail; the shell's exit code is non-zero.
+    rivet::sandbox::SandboxPolicy policy;
+    policy.path_rules.push_back({rivet::Path{"/tmp"},
+                                  rivet::sandbox::PathRule::Access::ReadOnly,
+                                  true});
+    // We also need to allow read+exec on the directories the shell needs
+    // (binary + glibc), otherwise execve itself fails. Allow /usr ReadOnly.
+    policy.path_rules.push_back({rivet::Path{"/usr"},
+                                  rivet::sandbox::PathRule::Access::ReadOnly,
+                                  true});
+    policy.path_rules.push_back({rivet::Path{"/bin"},
+                                  rivet::sandbox::PathRule::Access::ReadOnly,
+                                  true});
+    policy.path_rules.push_back({rivet::Path{"/lib"},
+                                  rivet::sandbox::PathRule::Access::ReadOnly,
+                                  true});
+    policy.path_rules.push_back({rivet::Path{"/lib64"},
+                                  rivet::sandbox::PathRule::Access::ReadOnly,
+                                  true});
+    int rc = run_under_sandbox(
+        {"/bin/sh", "-c", "echo hi > /tmp/rivet_landlock_should_block.$$"},
+        std::move(policy));
+    EXPECT_NE(rc, 0) << "ReadOnly rule should have blocked the write";
+}
+
+TEST(LinuxSandbox, ReadWriteRuleAllowsBothWaysOnPath) {
+    if (!rivet::sandbox::is_supported()) {
+        GTEST_SKIP() << "Landlock not available on this kernel";
+    }
+    // Allow /tmp ReadWrite. The same write that fails in the test above
+    // should succeed here.
+    rivet::sandbox::SandboxPolicy policy;
+    policy.path_rules.push_back({rivet::Path{"/tmp"},
+                                  rivet::sandbox::PathRule::Access::ReadWrite,
+                                  true});
+    policy.path_rules.push_back({rivet::Path{"/usr"},
+                                  rivet::sandbox::PathRule::Access::ReadOnly,
+                                  true});
+    policy.path_rules.push_back({rivet::Path{"/bin"},
+                                  rivet::sandbox::PathRule::Access::ReadOnly,
+                                  true});
+    policy.path_rules.push_back({rivet::Path{"/lib"},
+                                  rivet::sandbox::PathRule::Access::ReadOnly,
+                                  true});
+    policy.path_rules.push_back({rivet::Path{"/lib64"},
+                                  rivet::sandbox::PathRule::Access::ReadOnly,
+                                  true});
+    int rc = run_under_sandbox(
+        {"/bin/sh", "-c", "echo hi > /tmp/rivet_landlock_should_allow.$$ && rm -f /tmp/rivet_landlock_should_allow.$$"},
+        std::move(policy));
+    EXPECT_EQ(rc, 0) << "ReadWrite rule should have permitted the write";
+}
+
+#endif  // __linux__
+
 // On platforms whose sandbox backend hasn't been wired yet,
 // spawn_sandboxed should still return a running child -- the API
 // promises graceful degradation.
